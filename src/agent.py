@@ -1,5 +1,7 @@
 import logging
+import os
 import textwrap
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -17,6 +19,10 @@ from livekit.plugins import ai_coustics
 logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
+
+# Which persona handles this call. Flip to "leo" for the male-voiced variant.
+# Stored on every saved call so transcripts can be attributed later.
+AGENT_NAME = "ava"
 
 
 class Assistant(Agent):
@@ -88,6 +94,95 @@ class Assistant(Agent):
     #     return "sunny with a temperature of 70 degrees."
 
 
+def _save_call_to_supabase(
+    session: AgentSession,
+    ctx: JobContext,
+    agent_name: str,
+    started_at: datetime,
+) -> None:
+    """Persist the finished conversation to Supabase.
+
+    Runs as a shutdown callback once the session ends, so `session.history`
+    is finalized. All work is wrapped so a logging failure can never crash
+    the call — at worst we print the error and move on.
+    """
+    try:
+        from supabase import create_client
+
+        supabase_url = os.environ["SUPABASE_URL"]
+        supabase_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+        supabase = create_client(supabase_url, supabase_key)
+
+        # Build readable turns from the conversation history. Each "message"
+        # item carries a role (user/assistant/system) and its text content.
+        speaker_label = agent_name.capitalize()  # "Ava" or "Leo"
+        turns: list[tuple[str, str]] = []
+        for item in session.history.items:
+            if getattr(item, "type", None) != "message":
+                continue
+            role = getattr(item, "role", None)
+            if role not in ("user", "assistant"):
+                continue
+            text = (item.text_content or "").strip()
+            if not text:
+                continue
+            turns.append((role, text))
+
+        # "User: ...\nAva: ..." style transcript.
+        full_transcript = "\n".join(
+            f"{'User' if role == 'user' else speaker_label}: {text}"
+            for role, text in turns
+        )
+
+        ended_at = datetime.now(timezone.utc)
+        duration_seconds = int((ended_at - started_at).total_seconds())
+
+        participant_identity = next(iter(ctx.room.remote_participants.values()), None)
+        participant_identity = (
+            participant_identity.identity if participant_identity else None
+        )
+
+        # One row per call.
+        call_row = (
+            supabase.table("ava_calls")
+            .insert(
+                {
+                    "room_name": ctx.room.name,
+                    "session_id": ctx.job.id,
+                    "agent_name": agent_name,
+                    "participant_identity": participant_identity,
+                    "started_at": started_at.isoformat(),
+                    "ended_at": ended_at.isoformat(),
+                    "duration_seconds": duration_seconds,
+                    "full_transcript": full_transcript,
+                    "status": "completed",
+                }
+            )
+            .execute()
+        )
+        call_id = call_row.data[0]["id"]
+
+        # One row per conversation turn (assistant -> "agent" for the role check).
+        turn_rows = [
+            {
+                "call_id": call_id,
+                "turn_index": index,
+                "role": "user" if role == "user" else "agent",
+                "content": text,
+            }
+            for index, (role, text) in enumerate(turns)
+        ]
+        if turn_rows:
+            supabase.table("ava_transcript_turns").insert(turn_rows).execute()
+
+        logger.info(
+            f"Saved call {call_id} ({agent_name}) with {len(turn_rows)} turns "
+            f"to Supabase"
+        )
+    except Exception as exc:  # never let logging break the call
+        print(f"[supabase] failed to save call transcript: {exc}")
+
+
 server = AgentServer()
 
 
@@ -121,6 +216,16 @@ async def my_agent(ctx: JobContext):
         # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
         preemptive_generation=True,
     )
+
+    # Record when the call began so we can compute its duration on shutdown.
+    started_at = datetime.now(timezone.utc)
+
+    # When the session ends, save the full transcript (attributed to this
+    # persona) to Supabase. session.history is finalized by this point.
+    async def on_shutdown() -> None:
+        _save_call_to_supabase(session, ctx, AGENT_NAME, started_at)
+
+    ctx.add_shutdown_callback(on_shutdown)
 
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(

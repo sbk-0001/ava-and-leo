@@ -12,6 +12,7 @@ dependencies = [
     "livekit-agents>=1.6.1",
     "livekit-plugins-ai-coustics~=0.2",
     "python-dotenv",
+    "supabase>=2.31.0",
 ]
 
 [dependency-groups]

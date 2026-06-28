@@ -34,17 +34,28 @@ PERSONAS = {
     "ava": {"agent_name": "ava", "voice_id": AVA_VOICE_ID},
     "leo": {"agent_name": "leo", "voice_id": LEO_VOICE_ID},
 }
+DEFAULT_PERSONA = "ava"
 
-# Select the active persona from AGENT_PERSONA (default "ava").
-_persona_key = os.getenv("AGENT_PERSONA", "ava").strip().lower()
-if _persona_key not in PERSONAS:
-    logger.warning(
-        f"Unknown AGENT_PERSONA={_persona_key!r}; falling back to 'ava'. "
-        f"Valid options: {', '.join(PERSONAS)}."
-    )
-    _persona_key = "ava"
-PERSONA = PERSONAS[_persona_key]
-AGENT_NAME = PERSONA["agent_name"]
+
+def resolve_persona() -> tuple[str, dict[str, str]]:
+    """Resolve the active persona from AGENT_PERSONA.
+
+    Called inside the entrypoint (not at import time) so it always reflects the
+    live environment of the job process, after .env is loaded. The framework
+    runs each job in its own subprocess, so reading this at module scope is not
+    reliable; the entrypoint is the one place guaranteed to see the runtime env.
+
+    Returns the persona key and its config (agent_name + Cartesia voice id).
+    """
+    key = os.getenv("AGENT_PERSONA", DEFAULT_PERSONA).strip().lower()
+    if key not in PERSONAS:
+        logger.warning(
+            f"Unknown AGENT_PERSONA={key!r}; falling back to {DEFAULT_PERSONA!r}. "
+            f"Valid options: {', '.join(PERSONAS)}."
+        )
+        key = DEFAULT_PERSONA
+    return key, PERSONAS[key]
+
 
 # Provider API keys required by the model stack above.
 REQUIRED_ENV_VARS = ("ASSEMBLYAI_API_KEY", "GROQ_API_KEY", "CARTESIA_API_KEY")
@@ -221,22 +232,31 @@ async def my_agent(ctx: JobContext):
     # Fail fast with a clear, named error if any provider key is missing.
     _require_env()
 
+    # Resolve the persona here (in the job process, after env is loaded) so
+    # AGENT_PERSONA always takes effect. Drives BOTH the TTS voice and the
+    # agent_name written to Supabase.
+    persona_key, persona = resolve_persona()
+    agent_name = persona["agent_name"]
+    voice_id = persona["voice_id"]
+    logger.info(
+        f"persona resolved: {persona_key} (voice={voice_id}, agent_name={agent_name})"
+    )
+
     # Logging setup
     # Add any other context you want in all log entries here
     ctx.log_context_fields = {
         "room": ctx.room.name,
-        "persona": AGENT_NAME,
+        "persona": agent_name,
     }
-    logger.info(f"Starting agent as persona '{AGENT_NAME}'")
 
     # Set up the production voice AI pipeline: AssemblyAI STT, Cartesia TTS, and
     # the LiveKit turn detector. The Groq LLM lives on the Assistant agent. The
-    # TTS voice and the persona's agent_name are driven by AGENT_PERSONA above.
+    # TTS voice and the persona's agent_name are driven by AGENT_PERSONA.
     session = AgentSession(
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         stt=assemblyai.STT(model=ASSEMBLYAI_STT_MODEL),
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
-        tts=cartesia.TTS(model=CARTESIA_TTS_MODEL, voice=PERSONA["voice_id"]),
+        tts=cartesia.TTS(model=CARTESIA_TTS_MODEL, voice=voice_id),
         # The LiveKit turn detector determines when the user is done speaking and the agent should respond.
         # TurnDetector is an end-of-turn model that listens to the user's audio directly, combining
         # semantic understanding with acoustic cues (intonation, pitch, rhythm) for state-of-the-art accuracy.
@@ -256,7 +276,7 @@ async def my_agent(ctx: JobContext):
     # When the session ends, save the full transcript (attributed to this
     # persona) to Supabase. session.history is finalized by this point.
     async def on_shutdown() -> None:
-        _save_call_to_supabase(session, ctx, AGENT_NAME, started_at)
+        _save_call_to_supabase(session, ctx, agent_name, started_at)
 
     ctx.add_shutdown_callback(on_shutdown)
 

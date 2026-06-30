@@ -8,12 +8,16 @@ from livekit.agents import (
     Agent,
     AgentServer,
     AgentSession,
+    ConversationItemAddedEvent,
+    EndpointingOptions,
     JobContext,
+    PreemptiveGenerationOptions,
     TurnHandlingOptions,
     cli,
     inference,
     room_io,
 )
+from livekit.agents.llm import ChatMessage
 from livekit.plugins import ai_coustics, assemblyai, cartesia, groq
 
 logger = logging.getLogger("agent")
@@ -72,6 +76,44 @@ def _require_env() -> None:
         )
         print(f"[config] {message}")
         raise RuntimeError(message)
+
+
+def _fmt_ms(seconds: float | None) -> str:
+    """Format a latency value (seconds) as milliseconds, or 'n/a' if missing."""
+    if isinstance(seconds, (int, float)):
+        return f"{seconds * 1000:.0f}ms"
+    return "n/a"
+
+
+def _register_latency_logging(session: AgentSession) -> None:
+    """Log per-stage latency for each turn so it's visible in the terminal.
+
+    Uses the (non-deprecated) per-turn metrics on each ChatMessage, surfaced via
+    the conversation_item_added event. The handler is synchronous and only logs,
+    so it never blocks the reply hot path. Stages:
+      - user turn:  STT transcription delay + end-of-turn detection delay
+      - agent reply: LLM time-to-first-token, TTS time-to-first-byte, end-to-end
+    """
+
+    @session.on("conversation_item_added")
+    def _on_item(ev: ConversationItemAddedEvent) -> None:
+        item = ev.item
+        if not isinstance(item, ChatMessage):
+            return
+        m = item.metrics or {}
+        if item.role == "user":
+            logger.info(
+                "latency[user turn] "
+                f"stt_transcription_delay={_fmt_ms(m.get('transcription_delay'))} "
+                f"end_of_turn_delay={_fmt_ms(m.get('end_of_turn_delay'))}"
+            )
+        elif item.role == "assistant":
+            logger.info(
+                "latency[agent reply] "
+                f"llm_ttft={_fmt_ms(m.get('llm_node_ttft'))} "
+                f"tts_ttfb={_fmt_ms(m.get('tts_node_ttfb'))} "
+                f"e2e={_fmt_ms(m.get('e2e_latency'))}"
+            )
 
 
 class Assistant(Agent):
@@ -264,11 +306,26 @@ async def my_agent(ctx: JobContext):
         # See more at https://docs.livekit.io/agents/build/turns
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(),
+            # Endpointing = how long to wait after speech before committing the
+            # turn. The audio turn detector's defaults are min_delay=0.3,
+            # max_delay=2.5. We drop min_delay to 0.2s so the agent starts
+            # replying ~100ms sooner; the detector's semantic model still gates
+            # the commit, so this rarely clips mid-sentence. max_delay stays at
+            # 2.5s so slow speakers / pauses aren't cut off.
+            endpointing=EndpointingOptions(mode="fixed", min_delay=0.2, max_delay=2.5),
+            # Preemptive generation: run the LLM (and here, TTS too) before the
+            # end of turn is confirmed, so the first audio byte is ready sooner.
+            # Tradeoff: on a false end-of-turn the speculative reply is discarded,
+            # costing some extra LLM/TTS compute. See:
+            # https://docs.livekit.io/agents/build/audio/#preemptive-generation
+            preemptive_generation=PreemptiveGenerationOptions(
+                enabled=True, preemptive_tts=True
+            ),
         ),
-        # allow the LLM to generate a response while waiting for the end of turn
-        # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
-        preemptive_generation=True,
     )
+
+    # Log per-stage latency for every turn (off the hot path; logging only).
+    _register_latency_logging(session)
 
     # Record when the call began so we can compute its duration on shutdown.
     started_at = datetime.now(timezone.utc)

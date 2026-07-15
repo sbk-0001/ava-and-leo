@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import textwrap
@@ -18,6 +19,7 @@ from livekit.agents import (
     room_io,
 )
 from livekit.agents.llm import ChatMessage
+from livekit.agents.types import NOT_GIVEN
 from livekit.plugins import ai_coustics, assemblyai, cartesia, groq
 
 logger = logging.getLogger("agent")
@@ -117,13 +119,20 @@ def _register_latency_logging(session: AgentSession) -> None:
 
 
 class Assistant(Agent):
-    def __init__(self) -> None:
+    def __init__(self, agent_name: str = DEFAULT_PERSONA) -> None:
+        # The persona name is baked into the system prompt so the model actually
+        # KNOWS who it is (e.g. answers "what's your name?" as Leo), not just for
+        # the one-off greeting. Without this, switching AGENT_PERSONA changed the
+        # voice but the agent still couldn't identify itself.
+        display_name = agent_name.capitalize()
         super().__init__(
             # A Large Language Model (LLM) is your agent's brain, processing user
             # input and generating a response. STT and TTS live on the AgentSession.
             llm=groq.LLM(model=GROQ_LLM_MODEL),
             instructions=textwrap.dedent(
-                """\
+                f"""\
+                Your name is {display_name}. That is who you are; if the user asks your name, tell them it is {display_name}. Never claim to be any other name or a generic "assistant".
+
                 You are a friendly, reliable voice assistant that answers questions, explains topics, and completes tasks with available tools.
 
                 # Output rules
@@ -177,24 +186,92 @@ class Assistant(Agent):
     #     return "sunny with a temperature of 70 degrees."
 
 
-def _save_call_to_supabase(
+# How long we allow any single Supabase round-trip to take before giving up.
+# This is a CLIENT-SIDE network guard on OUR OWN I/O — it is NOT the worker's
+# ping timeout, shutdown-ack timeout, or any health-check interval. It only
+# stops a slow/hung Supabase call from making our async coroutine await
+# forever; the event loop stays responsive throughout because we `await`
+# (never block) on the async client.
+_SUPABASE_IO_TIMEOUT = 8.0
+
+
+async def _supabase_client():
+    """Create a truly async Supabase client (async postgrest under the hood).
+
+    We use `create_async_client` so every query is awaited, not run
+    synchronously on the event loop. The old code used the *synchronous*
+    client (`create_client(...).execute()`) directly inside an async shutdown
+    callback, which blocked the job's event loop on network I/O — the worker
+    then saw the process as unresponsive / unable to ack shutdown and killed
+    it, so the transcript flush never completed.
+    """
+    from supabase import create_async_client
+
+    supabase_url = os.environ["SUPABASE_URL"]
+    supabase_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+    return await create_async_client(supabase_url, supabase_key)
+
+
+def _participant_identity(ctx: JobContext) -> str | None:
+    participant = next(iter(ctx.room.remote_participants.values()), None)
+    return participant.identity if participant else None
+
+
+async def _insert_call_start(
+    ctx: JobContext,
+    agent_name: str,
+    started_at: datetime,
+) -> str | None:
+    """Insert the `ava_calls` row at session START with status 'in_progress'.
+
+    This is what gives us visibility even when a job dies mid-call: the row
+    exists before anything can go wrong, and `_finalize_call` upgrades it to
+    'completed' on a clean shutdown. Fully async and non-blocking; any failure
+    is swallowed (logging must never break a call).
+
+    Returns the new call id, or None if the insert failed.
+    """
+    try:
+        supabase = await _supabase_client()
+        result = await asyncio.wait_for(
+            supabase.table("ava_calls")
+            .insert(
+                {
+                    "room_name": ctx.room.name,
+                    "session_id": ctx.job.id,
+                    "agent_name": agent_name,
+                    "participant_identity": _participant_identity(ctx),
+                    "started_at": started_at.isoformat(),
+                    "status": "in_progress",
+                }
+            )
+            .execute(),
+            timeout=_SUPABASE_IO_TIMEOUT,
+        )
+        call_id = result.data[0]["id"]
+        logger.info(f"Opened call {call_id} ({agent_name}) in Supabase (in_progress)")
+        return call_id
+    except Exception as exc:  # never let logging break the call
+        print(f"[supabase] failed to insert call-start row: {exc}")
+        return None
+
+
+async def _finalize_call(
     session: AgentSession,
     ctx: JobContext,
     agent_name: str,
     started_at: datetime,
+    call_id: str | None,
 ) -> None:
-    """Persist the finished conversation to Supabase.
+    """Persist the finished conversation to Supabase (async, non-blocking).
 
     Runs as a shutdown callback once the session ends, so `session.history`
-    is finalized. All work is wrapped so a logging failure can never crash
-    the call — at worst we print the error and move on.
+    is finalized. Updates the 'in_progress' row opened at session start to
+    'completed'; if the start row is missing (its insert failed), inserts a
+    completed row as a fallback so we still capture the transcript.
     """
     try:
-        from supabase import create_client
-
-        supabase_url = os.environ["SUPABASE_URL"]
-        supabase_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
-        supabase = create_client(supabase_url, supabase_key)
+        supabase = await _supabase_client()
 
         # Build readable turns from the conversation history. Each "message"
         # item carries a role (user/assistant/system) and its text content.
@@ -220,30 +297,37 @@ def _save_call_to_supabase(
         ended_at = datetime.now(timezone.utc)
         duration_seconds = int((ended_at - started_at).total_seconds())
 
-        participant_identity = next(iter(ctx.room.remote_participants.values()), None)
-        participant_identity = (
-            participant_identity.identity if participant_identity else None
-        )
+        completion = {
+            "ended_at": ended_at.isoformat(),
+            "duration_seconds": duration_seconds,
+            "full_transcript": full_transcript,
+            "status": "completed",
+        }
 
-        # One row per call.
-        call_row = (
-            supabase.table("ava_calls")
-            .insert(
-                {
-                    "room_name": ctx.room.name,
-                    "session_id": ctx.job.id,
-                    "agent_name": agent_name,
-                    "participant_identity": participant_identity,
-                    "started_at": started_at.isoformat(),
-                    "ended_at": ended_at.isoformat(),
-                    "duration_seconds": duration_seconds,
-                    "full_transcript": full_transcript,
-                    "status": "completed",
-                }
+        if call_id is not None:
+            # Upgrade the row we opened at session start.
+            await asyncio.wait_for(
+                supabase.table("ava_calls")
+                .update(completion)
+                .eq("id", call_id)
+                .execute(),
+                timeout=_SUPABASE_IO_TIMEOUT,
             )
-            .execute()
-        )
-        call_id = call_row.data[0]["id"]
+        else:
+            # Start insert failed — insert a complete row so we don't lose it.
+            fallback = {
+                "room_name": ctx.room.name,
+                "session_id": ctx.job.id,
+                "agent_name": agent_name,
+                "participant_identity": _participant_identity(ctx),
+                "started_at": started_at.isoformat(),
+                **completion,
+            }
+            result = await asyncio.wait_for(
+                supabase.table("ava_calls").insert(fallback).execute(),
+                timeout=_SUPABASE_IO_TIMEOUT,
+            )
+            call_id = result.data[0]["id"]
 
         # One row per conversation turn (assistant -> "agent" for the role check).
         turn_rows = [
@@ -256,7 +340,10 @@ def _save_call_to_supabase(
             for index, (role, text) in enumerate(turns)
         ]
         if turn_rows:
-            supabase.table("ava_transcript_turns").insert(turn_rows).execute()
+            await asyncio.wait_for(
+                supabase.table("ava_transcript_turns").insert(turn_rows).execute(),
+                timeout=_SUPABASE_IO_TIMEOUT,
+            )
 
         logger.info(
             f"Saved call {call_id} ({agent_name}) with {len(turn_rows)} turns "
@@ -267,6 +354,26 @@ def _save_call_to_supabase(
 
 
 server = AgentServer()
+
+
+def _prewarm(proc) -> None:
+    """Load models ONCE per worker process, before any job runs.
+
+    The prewarm/setup function runs in the job process during initialization —
+    before the job's event loop is serving a call — so heavy model loading here
+    never blocks a live session's loop.
+
+    The only in-process model in this pipeline is the Silero VAD. Everything
+    else is remote and non-blocking: STT (AssemblyAI), TTS (Cartesia) and LLM
+    (Groq) are provider plugins that stream over the network, and the turn
+    detector is LiveKit Inference (cloud gateway), not a local model. We build
+    the VAD here and stash it on the process so `AgentSession` reuses it instead
+    of lazily constructing it on the job loop.
+    """
+    proc.userdata["vad"] = inference.VAD(model="silero")
+
+
+server.setup_fnc = _prewarm
 
 
 @server.rtc_session(agent_name="ava-and-leo")
@@ -295,6 +402,10 @@ async def my_agent(ctx: JobContext):
     # the LiveKit turn detector. The Groq LLM lives on the Assistant agent. The
     # TTS voice and the persona's agent_name are driven by AGENT_PERSONA.
     session = AgentSession(
+        # Reuse the Silero VAD loaded in _prewarm() so no model loads on this
+        # job's event loop. NOT_GIVEN (never None) lets AgentSession fall back
+        # to its own default VAD if prewarm somehow didn't run.
+        vad=ctx.proc.userdata.get("vad") or NOT_GIVEN,
         # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
         stt=assemblyai.STT(model=ASSEMBLYAI_STT_MODEL),
         # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
@@ -330,16 +441,27 @@ async def my_agent(ctx: JobContext):
     # Record when the call began so we can compute its duration on shutdown.
     started_at = datetime.now(timezone.utc)
 
-    # When the session ends, save the full transcript (attributed to this
-    # persona) to Supabase. session.history is finalized by this point.
+    # Open the ava_calls row NOW, at session start, with status 'in_progress'.
+    # Fired as a background task so it never delays the agent's first word; the
+    # shutdown callback awaits it to recover the call id. This is what gives us
+    # visibility even when a job is killed mid-call — the row already exists.
+    start_task = asyncio.create_task(_insert_call_start(ctx, agent_name, started_at))
+
+    # When the session ends, finalize the transcript (attributed to this
+    # persona) in Supabase. session.history is finalized by this point. Fully
+    # async so the event loop stays responsive and the process can ack shutdown.
     async def on_shutdown() -> None:
-        _save_call_to_supabase(session, ctx, agent_name, started_at)
+        try:
+            call_id = await start_task
+        except Exception:
+            call_id = None
+        await _finalize_call(session, ctx, agent_name, started_at, call_id)
 
     ctx.add_shutdown_callback(on_shutdown)
 
     # Start the session, which initializes the voice pipeline and warms up the models
     await session.start(
-        agent=Assistant(),
+        agent=Assistant(agent_name=agent_name),
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
@@ -363,6 +485,17 @@ async def my_agent(ctx: JobContext):
 
     # Join the room and connect to the user
     await ctx.connect()
+
+    # Speak first. Without this the agent connects and sits silent until the
+    # caller happens to talk — which reads as "the agent doesn't talk". We use
+    # generate_reply (not a canned line) so the greeting stays in persona and in
+    # the same Cartesia voice as the rest of the call.
+    await session.generate_reply(
+        instructions=(
+            f"Greet the caller warmly as {agent_name.capitalize()} in one short "
+            "sentence, and invite them to say how you can help."
+        )
+    )
 
 
 if __name__ == "__main__":

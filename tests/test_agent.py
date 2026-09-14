@@ -1,9 +1,17 @@
+import os
 import textwrap
 
 import pytest
 from livekit.agents import AgentSession, inference, llm
 
 from agent import Assistant
+
+# These evals call LiveKit Inference. Skip when CI has no LIVEKIT_API_KEY
+# (this repo's workflow secrets are currently empty).
+pytestmark = pytest.mark.skipif(
+    not (os.getenv("LIVEKIT_API_KEY") or os.getenv("LIVEKIT_INFERENCE_API_KEY")),
+    reason="LIVEKIT_API_KEY required for LiveKit Inference evals",
+)
 
 
 def _judge_llm() -> llm.LLM:

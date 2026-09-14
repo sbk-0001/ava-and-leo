@@ -64,7 +64,7 @@ async def place_outbound_call(
     trunk_id: str | None = None,
     wait_until_answered: bool = True,
 ) -> api.SIPParticipantInfo:
-    """Dispatch Leo, then dial with CreateSIPParticipant(wait_until_answered)."""
+    """Dispatch Ava, then dial with CreateSIPParticipant(wait_until_answered)."""
     phone = normalize_au_phone(phone_number) or phone_number
     branch = get_branch(branch_id)
     trunk = trunk_id or os.getenv("SIP_OUTBOUND_TRUNK_ID", "").strip()
@@ -75,7 +75,7 @@ async def place_outbound_call(
         )
 
     room = room_name or (
-        f"leo-{branch.id}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-"
+        f"ava-{branch.id}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-"
         f"{uuid.uuid4().hex[:6]}"
     )
     metadata = build_dispatch_metadata(
@@ -99,7 +99,7 @@ async def place_outbound_call(
             sip_call_to=phone,
             room_name=room,
             participant_identity=phone,
-            participant_name="Leo callee",
+            participant_name="Ava callee",
             wait_until_answered=wait_until_answered,
             play_dialtone=True,
         )
@@ -120,7 +120,7 @@ async def place_outbound_call(
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Dispatch the Leo agent and place an outbound SIP call.",
+        description="Dispatch the Ava agent and place an outbound SIP call.",
     )
     parser.add_argument(
         "--to", required=True, help="Phone number to dial (E.164 preferred)."

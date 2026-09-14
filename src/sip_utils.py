@@ -28,7 +28,7 @@ _SHUTDOWN_REASONS = frozenset({"USER_UNAVAILABLE", "SIP_TRUNK_FAILURE"})
 
 def normalize_au_phone(value: str | None) -> str:
     """Normalise an Australian number to +61… E.164, or digits with + if already international."""
-    if not value:
+    if not isinstance(value, str) or not value:
         return ""
     digits = re.sub(r"\D", "", value)
     if not digits:
@@ -83,7 +83,16 @@ def branch_from_participant(
 ) -> str:
     did = None
     if participant is not None:
-        did = participant.attributes.get("sip.trunkPhoneNumber")
+        try:
+            attributes = getattr(participant, "attributes", None)
+            raw = (
+                attributes.get("sip.trunkPhoneNumber")
+                if attributes is not None
+                else None
+            )
+        except Exception:
+            raw = None
+        did = raw if isinstance(raw, str) else None
     return branch_from_did(did, mapping)
 
 

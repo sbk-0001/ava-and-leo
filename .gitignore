@@ -29,5 +29,8 @@ KMS
 .cursor/chat/
 .cursor/rules/*.local.mdc
 
+# Mock diary (local PRACTICE_SOFTWARE=mock)
+.data/
+
 # GitHub CLI
 .github/personal-instructions.md

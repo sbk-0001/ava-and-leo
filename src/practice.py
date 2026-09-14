@@ -2,17 +2,31 @@
 
 Mock and disconnected modes must not invent diary slots. Confirmed is only
 returned as true when a book, reschedule, or cancel actually succeeds.
+
+PRACTICE_SOFTWARE=mock seeds a realistic diary from the official dentist
+lists and branch hours, persists in-process (and optionally to JSON) so the
+portal and the voice agent can share the same diary.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import sys
 import uuid
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field
+from datetime import date, datetime, timedelta
+from pathlib import Path
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
+
+from persona import BRANCHES, VERIFY
 
 PracticeMode = Literal["disconnected", "mock"]
+SYDNEY = ZoneInfo("Australia/Sydney")
+DEFAULT_MOCK_PATH = Path(".data/mock_diary.json")
 
 
 def _norm_text(value: str) -> str:
@@ -21,6 +35,30 @@ def _norm_text(value: str) -> str:
 
 def _norm_phone(value: str) -> str:
     return re.sub(r"\D", "", value)
+
+
+def _slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
+def _hhmm_to_minutes(value: str) -> int:
+    hours, minutes = value.split(":")
+    return int(hours) * 60 + int(minutes)
+
+
+def _minutes_to_hhmm(value: int) -> str:
+    return f"{value // 60:02d}:{value % 60:02d}"
+
+
+def _iter_slot_times(open_hhmm: str, close_hhmm: str, step: int = 30) -> list[str]:
+    start = _hhmm_to_minutes(open_hhmm)
+    end = _hhmm_to_minutes(close_hhmm)
+    times: list[str] = []
+    cursor = start
+    while cursor + step <= end:
+        times.append(_minutes_to_hhmm(cursor))
+        cursor += step
+    return times
 
 
 @dataclass
@@ -68,6 +106,7 @@ class PracticeClient:
     """Office-system client. Default is disconnected (no invented diary)."""
 
     mode: PracticeMode = "disconnected"
+    persist_path: Path | None = None
     patients: dict[str, Patient] = field(default_factory=dict)
     slots: dict[str, Slot] = field(default_factory=dict)
     bookings: dict[str, Booking] = field(default_factory=dict)
@@ -107,6 +146,7 @@ class PracticeClient:
         date: str,
         time: str,
         clinician: str,
+        taken: bool = False,
     ) -> None:
         self.slots[slot_id] = Slot(
             slot_id=slot_id,
@@ -114,7 +154,29 @@ class PracticeClient:
             date=date,
             time=time,
             clinician=clinician,
+            taken=taken,
         )
+
+    def _ensure_patient(
+        self,
+        *,
+        patient_id: str | None,
+        name: str | None,
+        phone: str | None,
+        date_of_birth: str | None,
+    ) -> str | None:
+        if patient_id and patient_id in self.patients:
+            return patient_id
+        if name:
+            new_id = patient_id or f"pat_{uuid.uuid4().hex[:10]}"
+            self.seed_patient(
+                patient_id=new_id,
+                name=name,
+                phone=phone or "",
+                date_of_birth=date_of_birth or "",
+            )
+            return new_id
+        return None
 
     async def find_patient(
         self,
@@ -171,15 +233,83 @@ class PracticeClient:
             and slot.date == date
             and (not clinician or _norm_text(slot.clinician) == _norm_text(clinician))
         ]
+        slots.sort(key=lambda item: (item["time"], item["clinician"]))
         return {"ok": True, "slots": slots, "date": date, "branch_id": branch_id}
+
+    async def list_diary(
+        self,
+        *,
+        branch_id: str,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        clinician: str | None = None,
+    ) -> dict[str, Any]:
+        if self.mode == "disconnected":
+            return self._unavailable("list_diary")
+
+        slots = []
+        for slot in self.slots.values():
+            if slot.branch_id != branch_id:
+                continue
+            if date_from and slot.date < date_from:
+                continue
+            if date_to and slot.date > date_to:
+                continue
+            if clinician and _norm_text(slot.clinician) != _norm_text(clinician):
+                continue
+            slots.append(
+                {
+                    "slot_id": slot.slot_id,
+                    "date": slot.date,
+                    "time": slot.time,
+                    "clinician": slot.clinician,
+                    "branch_id": slot.branch_id,
+                    "taken": slot.taken,
+                }
+            )
+        slots.sort(key=lambda item: (item["date"], item["time"], item["clinician"]))
+
+        bookings = []
+        for booking in self.bookings.values():
+            if booking.cancelled or booking.branch_id != branch_id:
+                continue
+            if date_from and booking.date < date_from:
+                continue
+            if date_to and booking.date > date_to:
+                continue
+            patient = self.patients.get(booking.patient_id)
+            bookings.append(
+                {
+                    "booking_id": booking.booking_id,
+                    "slot_id": booking.slot_id,
+                    "branch_id": booking.branch_id,
+                    "patient_id": booking.patient_id,
+                    "patient_name": patient.name if patient else "",
+                    "patient_phone": patient.phone if patient else "",
+                    "date": booking.date,
+                    "time": booking.time,
+                    "clinician": booking.clinician,
+                    "reason": booking.reason,
+                }
+            )
+        bookings.sort(key=lambda item: (item["date"], item["time"]))
+        return {
+            "ok": True,
+            "branch_id": branch_id,
+            "slots": slots,
+            "bookings": bookings,
+        }
 
     async def book_appointment(
         self,
         *,
         branch_id: str,
         slot_id: str,
-        patient_id: str,
         reason: str,
+        patient_id: str | None = None,
+        name: str | None = None,
+        phone: str | None = None,
+        date_of_birth: str | None = None,
     ) -> dict[str, Any]:
         if self.mode == "disconnected":
             return self._unavailable("book_appointment")
@@ -191,7 +321,13 @@ class PracticeClient:
                 "reason": "slot_unavailable",
                 "note": "That time is not in the diary. Do not invent another time.",
             }
-        if patient_id not in self.patients:
+        resolved = self._ensure_patient(
+            patient_id=patient_id,
+            name=name,
+            phone=phone,
+            date_of_birth=date_of_birth,
+        )
+        if resolved is None:
             return {
                 "ok": False,
                 "reason": "patient_not_found",
@@ -204,17 +340,19 @@ class PracticeClient:
             booking_id=booking_id,
             slot_id=slot.slot_id,
             branch_id=branch_id,
-            patient_id=patient_id,
+            patient_id=resolved,
             date=slot.date,
             time=slot.time,
             clinician=slot.clinician,
             reason=reason,
         )
         self.bookings[booking_id] = booking
+        self.save()
         return {
             "ok": True,
             "confirmed": True,
             "booking_id": booking_id,
+            "patient_id": resolved,
             "date": booking.date,
             "time": booking.time,
             "clinician": booking.clinician,
@@ -250,6 +388,7 @@ class PracticeClient:
         booking.time = new_slot.time
         booking.clinician = new_slot.clinician
         booking.branch_id = new_slot.branch_id
+        self.save()
         return {
             "ok": True,
             "confirmed": True,
@@ -272,6 +411,7 @@ class PracticeClient:
         slot = self.slots.get(booking.slot_id)
         if slot is not None:
             slot.taken = False
+        self.save()
         return {
             "ok": True,
             "confirmed": True,
@@ -295,6 +435,7 @@ class PracticeClient:
             body=body,
         )
         self.messages.append(message)
+        self.save()
         return {
             "ok": True,
             "confirmed": True,
@@ -302,8 +443,163 @@ class PracticeClient:
             "branch_id": branch_id,
         }
 
+    def save(self) -> None:
+        if self.persist_path is None:
+            return
+        path = Path(self.persist_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "patients": {key: asdict(value) for key, value in self.patients.items()},
+            "slots": {key: asdict(value) for key, value in self.slots.items()},
+            "bookings": {key: asdict(value) for key, value in self.bookings.items()},
+            "messages": [asdict(item) for item in self.messages],
+        }
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
-def practice_from_env() -> PracticeClient:
-    raw = os.getenv("PRACTICE_SOFTWARE", "disconnected").strip().lower()
-    mode: PracticeMode = "mock" if raw == "mock" else "disconnected"
-    return PracticeClient(mode=mode)
+    def load(self) -> None:
+        if self.persist_path is None:
+            return
+        path = Path(self.persist_path)
+        if not path.exists():
+            return
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        self.patients = {
+            key: Patient(**value) for key, value in payload.get("patients", {}).items()
+        }
+        self.slots = {
+            key: Slot(**value) for key, value in payload.get("slots", {}).items()
+        }
+        self.bookings = {
+            key: Booking(**value) for key, value in payload.get("bookings", {}).items()
+        }
+        self.messages = [Message(**item) for item in payload.get("messages", [])]
+
+
+def seed_mock_diary(
+    client: PracticeClient,
+    *,
+    today: date | None = None,
+    days: int = 14,
+    replace: bool = False,
+) -> int:
+    """Fill open slots across the next `days` using real dentist names and hours."""
+    if client.slots and not replace:
+        return 0
+
+    start = today or datetime.now(SYDNEY).date()
+    created = 0
+    demo_patients = (
+        ("Jordan Blake", "0413000111"),
+        ("Priya Nair", "0413000222"),
+        ("Chris O'Neill", "0413000333"),
+    )
+    for index, (name, phone) in enumerate(demo_patients, start=1):
+        client.seed_patient(patient_id=f"pat_demo_{index}", name=name, phone=phone)
+
+    for offset in range(days):
+        day = start + timedelta(days=offset)
+        weekday = day.weekday()  # Mon=0
+        if weekday == 6:
+            continue
+        for branch in BRANCHES.values():
+            hours = branch.clinic_hours
+            dentists = [name for name in branch.dentists if name != VERIFY]
+            if not dentists:
+                continue
+            if weekday == 5:
+                if not hours.saturday_open or not hours.saturday_close:
+                    continue
+                times = _iter_slot_times(hours.saturday_open, hours.saturday_close)
+                if hours.saturday_by_appointment:
+                    times = times[:2]
+            else:
+                times = _iter_slot_times(hours.weekday_open, hours.weekday_close)
+            for time_index, time in enumerate(times):
+                clinician = dentists[time_index % len(dentists)]
+                slot_id = (
+                    f"slot_{branch.id}_{day.isoformat()}_{time.replace(':', '')}"
+                    f"_{_slug(clinician)}"
+                )
+                taken = created % 11 == 0 and not hours.saturday_by_appointment
+                client.seed_slot(
+                    slot_id=slot_id,
+                    branch_id=branch.id,
+                    date=day.isoformat(),
+                    time=time,
+                    clinician=clinician,
+                    taken=taken,
+                )
+                if taken:
+                    patient_id = f"pat_demo_{(created % 3) + 1}"
+                    booking_id = f"bkg_seed_{created:04d}"
+                    client.bookings[booking_id] = Booking(
+                        booking_id=booking_id,
+                        slot_id=slot_id,
+                        branch_id=branch.id,
+                        patient_id=patient_id,
+                        date=day.isoformat(),
+                        time=time,
+                        clinician=clinician,
+                        reason="existing booking",
+                    )
+                created += 1
+    return created
+
+
+_SHARED: PracticeClient | None = None
+
+
+def reset_shared_practice() -> None:
+    global _SHARED
+    _SHARED = None
+
+
+def _is_production_start() -> bool:
+    return "start" in sys.argv
+
+
+def _resolve_mode(
+    *,
+    is_telephony: bool,
+    env: Mapping[str, str],
+) -> PracticeMode:
+    raw = str(env.get("PRACTICE_SOFTWARE", "")).strip().lower()
+    if raw in {"mock", "disconnected"}:
+        return raw  # type: ignore[return-value]
+    if is_telephony or _is_production_start():
+        return "disconnected"
+    return "mock"
+
+
+def practice_from_env(
+    *,
+    is_telephony: bool = False,
+    persist: bool = True,
+    env: Mapping[str, str] | None = None,
+) -> PracticeClient:
+    environ = env if env is not None else os.environ
+    mode = _resolve_mode(is_telephony=is_telephony, env=environ)
+    path: Path | None = None
+    if persist and mode == "mock":
+        raw_path = str(environ.get("MOCK_DIARY_PATH", "")).strip()
+        path = Path(raw_path) if raw_path else DEFAULT_MOCK_PATH
+    client = PracticeClient(mode=mode, persist_path=path)
+    if mode == "mock":
+        client.load()
+        if not client.slots:
+            seed_mock_diary(client)
+            client.save()
+    return client
+
+
+def get_shared_practice(
+    *,
+    is_telephony: bool = False,
+    persist: bool = True,
+    env: Mapping[str, str] | None = None,
+) -> PracticeClient:
+    """In-process singleton so the portal and Leo share one diary."""
+    global _SHARED
+    if _SHARED is None:
+        _SHARED = practice_from_env(is_telephony=is_telephony, persist=persist, env=env)
+    return _SHARED

@@ -1,0 +1,223 @@
+:root {
+  --paper: #f3efe6;
+  --ink: #1c2a24;
+  --muted: #5d6b64;
+  --card: #fffcf7;
+  --line: #d9d0c2;
+  --teal: #0f6b5c;
+  --teal-dark: #0b5247;
+  --open: #e5f3ec;
+  --booked: #f8ebe3;
+  --live: #c45c26;
+  --shadow: 0 10px 30px rgba(28, 42, 36, 0.08);
+  --radius: 18px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "DM Sans", system-ui, sans-serif;
+}
+
+h1, h2, h3, .eyebrow {
+  font-family: Fraunces, Georgia, serif;
+}
+
+h1 { font-size: 1.8rem; margin: 0; font-weight: 600; }
+h2 { font-size: 1.35rem; margin: 0 0 0.6rem; }
+h3 { font-size: 1.05rem; margin: 1.2rem 0 0.4rem; }
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.72rem;
+  color: var(--teal);
+  margin: 0 0 0.2rem;
+}
+
+.muted { color: var(--muted); }
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: 1.25rem 1.25rem 0.5rem;
+}
+
+.topbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.auth-note { max-width: 16rem; font-size: 0.82rem; text-align: right; }
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  overflow-x: auto;
+}
+
+.tabs button {
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 0.55rem 0.95rem;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tabs button[aria-current="true"] {
+  background: var(--teal);
+  color: white;
+  border-color: var(--teal);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.3fr);
+  gap: 1rem;
+  padding: 0 1.25rem 2rem;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.15rem;
+}
+
+.facts dl { margin: 0; }
+.facts dl div { margin: 0.7rem 0; }
+.facts dt {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.facts dd { margin: 0.15rem 0 0; line-height: 1.45; }
+
+.dentist-list { list-style: none; padding: 0; margin: 0; }
+.dentist-list li {
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.dentist-list .role { color: var(--muted); font-size: 0.9rem; }
+
+.diary-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: end;
+  margin-bottom: 0.9rem;
+}
+
+.date-label { display: grid; gap: 0.3rem; font-size: 0.85rem; }
+
+input, button {
+  font: inherit;
+}
+
+input[type="text"],
+input[type="tel"],
+input[type="password"],
+input[type="date"] {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.65rem 0.75rem;
+  background: white;
+}
+
+button {
+  border: 0;
+  background: var(--teal);
+  color: white;
+  border-radius: 999px;
+  padding: 0.7rem 1.1rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.call-btn { background: var(--live); }
+.call-btn.live { animation: pulse 1.6s ease-in-out infinite; }
+
+.call-status {
+  margin: 0 1.25rem 0.5rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 12px;
+  background: #fff4ea;
+  color: var(--live);
+}
+
+.slot-list { display: grid; gap: 0.55rem; }
+
+.slot {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr auto;
+  gap: 0.6rem;
+  align-items: center;
+  padding: 0.7rem 0.8rem;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+}
+
+.slot.open { background: var(--open); }
+.slot.taken { background: var(--booked); }
+.slot time { font-variant-numeric: tabular-nums; font-weight: 600; }
+.slot .meta { font-size: 0.92rem; }
+.slot .who { color: var(--muted); font-size: 0.85rem; }
+.slot .actions { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.slot .actions button { padding: 0.4rem 0.75rem; font-size: 0.85rem; }
+
+.dialog {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  max-width: 28rem;
+  width: calc(100% - 2rem);
+}
+.dialog::backdrop { background: rgba(28, 42, 36, 0.35); }
+.dialog form { display: grid; gap: 0.7rem; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+
+.gate {
+  position: fixed;
+  inset: 0;
+  background: var(--paper);
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+.gate-card { width: min(24rem, 100%); display: grid; gap: 0.8rem; }
+
+.error { color: #9b2c2c; font-size: 0.9rem; }
+.hidden { display: none !important; }
+
+@keyframes pulse {
+  50% { transform: scale(1.03); }
+}
+
+@media (max-width: 860px) {
+  .layout { grid-template-columns: 1fr; }
+  .topbar { flex-direction: column; }
+  .auth-note { text-align: left; max-width: none; }
+  .slot { grid-template-columns: 1fr; }
+}

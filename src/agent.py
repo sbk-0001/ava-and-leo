@@ -23,8 +23,8 @@ from livekit.agents.llm import ChatMessage
 from livekit.plugins import ai_coustics, assemblyai, cartesia, groq
 
 from leo import LeoReceptionist, inbound_greeting_instructions
-from persona import resolve_persona
-from practice import practice_from_env
+from persona import VALID_PERSONAS, resolve_persona
+from practice import get_shared_practice
 from sip_utils import (
     SIP_CALL_ERRORS,
     branch_from_participant,
@@ -357,7 +357,14 @@ async def my_agent(ctx: JobContext):
         participant = await ctx.wait_for_participant()
 
     is_telephony = is_sip_participant(participant) or bool(phone_number)
-    persona_key = resolve_persona(is_telephony=is_telephony)
+    metadata_persona = metadata.get("persona")
+    if (
+        isinstance(metadata_persona, str)
+        and metadata_persona.strip().lower() in VALID_PERSONAS
+    ):
+        persona_key = metadata_persona.strip().lower()
+    else:
+        persona_key = resolve_persona(is_telephony=is_telephony)
     persona = PERSONAS[persona_key]
     agent_name = persona["agent_name"]
     logger.info(
@@ -383,7 +390,7 @@ async def my_agent(ctx: JobContext):
 
     if persona_key == "leo":
         _require_env(LEO_ENV_VARS)
-        practice = practice_from_env()
+        practice = get_shared_practice(is_telephony=is_telephony)
         transfer_to = os.getenv("SIP_TRANSFER_TO", "").strip() or None
         agent: Agent = LeoReceptionist(
             branch_id=branch_id,

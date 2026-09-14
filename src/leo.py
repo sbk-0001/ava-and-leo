@@ -62,8 +62,8 @@ class LeoReceptionist(Agent):
             ),
             "delete_room": True,
             "end_instructions": (
-                "Thank them briefly in Australian English and say goodbye. "
-                "Keep it to one short sentence."
+                "Thank them briefly in warm Australian English and say goodbye. "
+                "Keep it to one short sentence. Sound human, not scripted."
             ),
         }
         # Hide end_call during greeting. Older SDKs omit this kwarg; passing it
@@ -275,7 +275,10 @@ class LeoReceptionist(Agent):
             return {"ok": False, "reason": "no_sip_caller"}
 
         await context.session.generate_reply(
-            instructions="Tell the caller you are putting them through to the team now."
+            instructions=(
+                "Tell the caller you are putting them through to the team now. "
+                "Warm and brief."
+            )
         )
 
         destination = transfer_to if ":" in transfer_to else f"tel:{transfer_to}"
@@ -298,6 +301,8 @@ class LeoReceptionist(Agent):
 def inbound_greeting_instructions(branch_id: str) -> str:
     branch = get_branch(branch_id)
     return (
+        "Sound warm and human, like a real receptionist picking up — not a script. "
         f"Greet the caller as Leo at {branch.trading_name} in {branch.suburb}. "
-        "Offer to help with a booking or a question. One short sentence plus one question."
+        "One short sentence plus one question. Offer to help with a booking or a "
+        "question. Do not say G'day."
     )

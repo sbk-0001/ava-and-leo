@@ -1,6 +1,7 @@
 """Unit tests for Leo persona, branch facts, and AGENT_PERSONA switching."""
 
 from persona import (
+    BACKEND_INSTRUCTIONS,
     BRANCHES,
     DEFAULT_TELEPHONY_PERSONA,
     DEFAULT_WEB_PERSONA,
@@ -112,6 +113,45 @@ def test_branch_block_includes_instant_facts() -> None:
     assert "do not invent" in block.lower() or "VERIFY" in block
 
 
+def test_voice_instructions_include_human_affect() -> None:
+    """Spoken style must keep Leo warm and human, not a stiff script.
+
+    Snapshot-style keyword checks so humour, emotion, and laughter do not
+    silently drop out of VOICE_INSTRUCTIONS.
+    """
+    spoken = VOICE_INSTRUCTIONS.lower()
+    assert "humour" in spoken or "humor" in spoken
+    assert "laugh" in spoken
+    assert "warm" in spoken or "warmth" in spoken
+    assert "concern" in spoken or "emotion" in spoken
+    assert "relief" in spoken
+    assert "pain" in spoken or "emergency" in spoken
+    assert "mm-hmm" in spoken
+    assert "no worries" in spoken
+    assert "illawarra" in spoken
+    assert "american" in spoken
+    assert "g'day" in spoken
+    assert "ai" in spoken
+    assert "one question" in spoken
+
+
+def test_backend_instructions_policy_intact() -> None:
+    """Clinic policy lives in BACKEND_INSTRUCTIONS and must not be rewritten away."""
+    text = BACKEND_INSTRUCTIONS
+    lowered = text.lower()
+    assert "CURRENT BRANCH:" in text
+    assert "INSTANT FACTS versus TOOLS:" in text
+    assert "parking" in lowered
+    assert "hours" in lowered
+    assert "dentist" in lowered
+    assert "VERIFY" in text
+    assert "Never invent diary slots" in text
+    assert 'Use the word "confirmed" only after' in text
+    assert "triple zero, 000" in text
+    assert "Do not fill VERIFY gaps." in text
+    assert "Quote only canned fees" in text
+
+
 def test_leo_instructions_are_female_au_voice_with_tool_rules() -> None:
     text = leo_instructions("shellharbour")
     lowered = text.lower()
@@ -126,6 +166,8 @@ def test_leo_instructions_are_female_au_voice_with_tool_rules() -> None:
     assert "Shellharbour Dentists" in text
     assert "never invent" in lowered or "do not invent" in lowered
     assert "Captain Cook Drive" in text
+    assert VOICE_INSTRUCTIONS in text
+    assert "Never invent diary slots" in text
 
 
 def test_resolve_persona_explicit_env() -> None:

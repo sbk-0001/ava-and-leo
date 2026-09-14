@@ -42,6 +42,21 @@ def test_inbound_greeting_is_ava_and_human() -> None:
     assert len(text) < 400
 
 
+def test_ava_worker_publishes_desk_feed_from_session_events() -> None:
+    """Call Ava desk uses conversation_item_added + function_tools_executed.
+
+    Docs: https://docs.livekit.io/reference/agents/events/#conversation_item_added
+          https://docs.livekit.io/reference/agents/events/#function_tools_executed
+    """
+    from agent import _register_desk_feed, my_agent
+
+    source = inspect.getsource(_register_desk_feed) + inspect.getsource(my_agent)
+    assert "conversation_item_added" in source
+    assert "function_tools_executed" in source
+    assert "_register_desk_feed" in inspect.getsource(my_agent)
+    assert 'persona_key == "ava"' in inspect.getsource(my_agent)
+
+
 def test_ava_session_uses_realtime_llm_and_interruptions() -> None:
     from agent import _build_ava_session
 

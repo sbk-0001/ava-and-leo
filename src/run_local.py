@@ -54,6 +54,7 @@ def main() -> None:
     print()
     print(f"Ava clinic portal: {url}")
     print("  Pick a branch, book in the mock diary, then Call Ava.")
+    print("  During the call, watch the Live call panel for transcript and bookings.")
     if password:
         print("  Auth: PORTAL_PASSWORD is set (shared gate).")
     else:

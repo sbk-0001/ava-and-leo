@@ -12,6 +12,7 @@ from livekit.agents import (
     AgentSession,
     ConversationItemAddedEvent,
     EndpointingOptions,
+    FunctionToolsExecutedEvent,
     JobContext,
     PreemptiveGenerationOptions,
     TurnHandlingOptions,
@@ -23,6 +24,11 @@ from livekit.agents.llm import ChatMessage
 from livekit.plugins import ai_coustics, assemblyai, cartesia, groq
 
 from ava_receptionist import AvaReceptionist, inbound_greeting_instructions
+from desk_events import (
+    activity_packets_from_tools,
+    schedule_desk_publish,
+    transcript_packet,
+)
 from persona import CANONICAL_PERSONAS, canonical_persona, resolve_persona
 from practice import get_shared_practice
 from sip_utils import (
@@ -116,6 +122,25 @@ def _register_latency_logging(session: AgentSession) -> None:
                 f"tts_ttfb={_fmt_ms(m.get('tts_node_ttfb'))} "
                 f"e2e={_fmt_ms(m.get('e2e_latency'))}"
             )
+
+
+def _register_desk_feed(session: AgentSession, room: Any) -> None:
+    """Forward committed turns and successful practice tools to the staff browser.
+
+    conversation_item_added covers user and Ava ChatMessages (including Realtime).
+    function_tools_executed fires after each successful practice-tool batch.
+    Docs: https://docs.livekit.io/reference/agents/events/#conversation_item_added
+          https://docs.livekit.io/reference/agents/events/#function_tools_executed
+    """
+
+    @session.on("conversation_item_added")
+    def _on_desk_item(ev: ConversationItemAddedEvent) -> None:
+        schedule_desk_publish(room, transcript_packet(ev.item))
+
+    @session.on("function_tools_executed")
+    def _on_desk_tools(ev: FunctionToolsExecutedEvent) -> None:
+        for packet in activity_packets_from_tools(ev):
+            schedule_desk_publish(room, packet)
 
 
 class Assistant(Agent):
@@ -427,6 +452,8 @@ async def my_agent(ctx: JobContext):
         session = _build_generic_session(persona["voice_id"])
 
     _register_latency_logging(session)
+    if persona_key == "ava":
+        _register_desk_feed(session, ctx.room)
 
     async def on_shutdown() -> None:
         _save_call_to_supabase(session, ctx, agent_name, started_at)

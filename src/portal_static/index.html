@@ -42,6 +42,26 @@
     <div id="call-status" class="call-status hidden" role="status"></div>
     <div id="remote-audio"></div>
 
+    <section id="live-call" class="card live-call hidden" aria-live="polite">
+      <div class="live-call-head">
+        <div>
+          <p class="eyebrow">Live call</p>
+          <h2>Transcript and booking activity</h2>
+        </div>
+        <p class="muted live-call-hint">Updates as Ava talks and uses the diary.</p>
+      </div>
+      <div class="live-call-grid">
+        <div>
+          <h3>Transcript</h3>
+          <div id="live-transcript" class="live-scroll"></div>
+        </div>
+        <div>
+          <h3>Booking activity</h3>
+          <div id="live-activity" class="live-scroll"></div>
+        </div>
+      </div>
+    </section>
+
     <nav id="branch-tabs" class="tabs" aria-label="Branches"></nav>
 
     <main class="layout">

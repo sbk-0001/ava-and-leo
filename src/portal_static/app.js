@@ -1,8 +1,23 @@
+const DESK_TOPIC = "ava.desk";
+
 const state = {
   branchId: "shellharbour",
   branches: [],
   diary: { slots: [], bookings: [] },
   room: null,
+};
+
+const FIELD_LABELS = {
+  name: "Name",
+  time: "Time",
+  date: "Date",
+  doctor: "Doctor",
+  branch: "Branch",
+  reason: "Reason",
+  booking_id: "Booking",
+  phone: "Phone",
+  open_slots: "Open slots",
+  matches: "Matches",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -208,6 +223,103 @@ $("book-form").addEventListener("submit", async (event) => {
   }
 });
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function showLiveCall() {
+  $("live-transcript").innerHTML = "";
+  $("live-activity").innerHTML = "";
+  $("live-call").classList.remove("hidden");
+}
+
+function hideLiveCall() {
+  $("live-call").classList.add("hidden");
+}
+
+function appendLiveLine(containerId, className, html) {
+  const list = $(containerId);
+  const line = document.createElement("article");
+  line.className = className;
+  line.innerHTML = html;
+  list.appendChild(line);
+  list.scrollTop = list.scrollHeight;
+}
+
+function renderTranscript(packet) {
+  const role = packet.role === "assistant" ? "assistant" : "user";
+  const who = role === "assistant" ? "Ava" : "Caller";
+  appendLiveLine(
+    "live-transcript",
+    `live-line ${role}`,
+    `<div class="who">${who}</div><div>${escapeHtml(packet.text || "")}</div>`
+  );
+}
+
+function renderActivity(packet) {
+  const payload = packet.payload || {};
+  const fields = Object.entries(FIELD_LABELS)
+    .filter(([key]) => payload[key] !== undefined && payload[key] !== "")
+    .map(
+      ([key, label]) =>
+        `<span><strong>${escapeHtml(label)}:</strong> ${escapeHtml(payload[key])}</span>`
+    )
+    .join("");
+  appendLiveLine(
+    "live-activity",
+    "live-line activity",
+    `<div class="who">${escapeHtml(
+      packet.label || packet.action || "Activity"
+    )}</div>${fields ? `<div class="fields">${fields}</div>` : ""}`
+  );
+}
+
+async function maybeRefreshDiary(packet) {
+  if (!packet.refresh_diary) return;
+  const payload = packet.payload || {};
+  if (payload.date && $("diary-date").value !== payload.date) {
+    $("diary-date").value = payload.date;
+  }
+  if (payload.branch && payload.branch !== state.branchId) {
+    state.branchId = payload.branch;
+    renderTabs();
+    renderFacts();
+  }
+  await loadDiary();
+}
+
+function handleDeskPacket(packet) {
+  if (!packet || typeof packet !== "object") return;
+  if (packet.type === "transcript" && packet.text) {
+    renderTranscript(packet);
+    return;
+  }
+  if (packet.type === "activity") {
+    renderActivity(packet);
+    maybeRefreshDiary(packet).catch(() => {});
+  }
+}
+
+function subscribeDeskFeed(room) {
+  const RoomEvent = window.LivekitClient.RoomEvent;
+  const decoder = new TextDecoder();
+  room.on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
+    if (topic && topic !== DESK_TOPIC) return;
+    let packet;
+    try {
+      packet = JSON.parse(decoder.decode(payload));
+    } catch {
+      return;
+    }
+    if (packet.type !== "transcript" && packet.type !== "activity") return;
+    handleDeskPacket(packet);
+  });
+}
+
 function setCallStatus(message, visible = true) {
   const el = $("call-status");
   el.textContent = message;
@@ -231,6 +343,8 @@ async function callAva() {
       }
     });
     room.on(RoomEvent.Disconnected, () => hangUp(false));
+    subscribeDeskFeed(room);
+    showLiveCall();
     await room.connect(token.url, token.token);
     await room.startAudio();
     await room.localParticipant.setMicrophoneEnabled(true);
@@ -239,6 +353,7 @@ async function callAva() {
     setCallStatus(`Connected to Ava at ${currentBranch().trading_name}. Speak normally.`);
   } catch (error) {
     $("call-ava").classList.remove("live");
+    hideLiveCall();
     setCallStatus(error.message || "Could not connect. Is the agent worker running?");
   }
 }
@@ -251,6 +366,7 @@ async function hangUp(disconnect = true) {
   $("call-ava").classList.remove("live");
   $("hang-up").classList.add("hidden");
   $("remote-audio").innerHTML = "";
+  hideLiveCall();
   setCallStatus("Call ended.", true);
 }
 

@@ -67,7 +67,7 @@ Then open **http://127.0.0.1:8787**
 | See a branch | Use the Barrack Heights / Dapto / Woonona tabs. Address, phone, hours, parking, and dentists are on the left. |
 | Book | Pick a date, tap **Book** on an open slot, enter name + mobile, confirm. The diary only says confirmed after the mock mutation succeeds. |
 | Reschedule / cancel | On a booked row, **Reschedule** (moves to an open slot that day) or **Cancel**. |
-| Talk to Ava | Tap **Call Ava**. Allow the microphone. The portal mints a LiveKit token on the server (keys never go in frontend source) and dispatches `ava-and-leo`. Hang up when finished. |
+| Talk to Ava | Tap **Call Ava**. Allow the microphone. The portal mints a LiveKit token on the server (keys never go in frontend source) and dispatches `ava-and-leo`. The **Live call** panel shows the transcript and booking activity as they happen; the diary refreshes when Ava books, reschedules, or cancels. Hang up when finished. |
 
 Auth: empty `PORTAL_PASSWORD` is open **on localhost only**. Set `PORTAL_PASSWORD` before exposing the portal. Do not put LiveKit secrets in the browser.
 
@@ -137,7 +137,7 @@ On outbound, Ava waits for the callee to speak first. On inbound, Ava greets as 
 ## Tests
 
 ```bash
-uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py -v
+uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py tests/test_desk_events.py -v
 uv run pytest            # includes generic-pipeline evals; needs LIVEKIT_* in CI
 ```
 
@@ -149,6 +149,7 @@ Unit tests cover persona switching, Ava naming, human VOICE_INSTRUCTIONS, branch
 src/agent.py              # entrypoint: Ava Realtime or generic pipeline
 src/persona.py            # Ava prompts, branches, fees (source of truth)
 src/ava_receptionist.py   # AvaReceptionist + office-system tools
+src/desk_events.py        # Live call transcript + booking activity for the portal
 src/practice.py           # disconnected / mock practice software
 src/portal.py             # FastAPI clinic desk (facts, diary, Call Ava token)
 src/portal_static/        # portal UI

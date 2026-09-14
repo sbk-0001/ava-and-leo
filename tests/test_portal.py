@@ -104,3 +104,20 @@ def test_portal_ui_says_call_ava() -> None:
     assert "Connecting to Ava" in js
     assert "Connected to Ava" in js
     assert "Leo" not in js
+
+
+def test_portal_has_live_call_panel() -> None:
+    html = (STATIC / "index.html").read_text()
+    css = (STATIC / "styles.css").read_text()
+    js = (STATIC / "app.js").read_text()
+    assert 'id="live-call"' in html
+    assert "Live call" in html
+    assert 'id="live-transcript"' in html
+    assert 'id="live-activity"' in html
+    assert "live-call" in css
+    assert "RoomEvent.DataReceived" in js
+    assert "ava.desk" in js
+    assert "loadDiary()" in js
+    assert "refresh_diary" in js
+    assert "live-transcript" in js
+    assert "live-activity" in js

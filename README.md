@@ -24,6 +24,7 @@ Ava stays on OpenAI Realtime speech-to-speech. Settings aimed at snappy, interru
 - Server VAD with `silence_duration_ms=400` and `threshold=0.7` (telephony-friendly)
 - `interrupt_response=True` so the caller can barge in
 - `AgentSession` `turn_detection="realtime_llm"` with interruptions enabled
+- Realtime playback `speed=0.85` (unhurried) on voice **marin**
 - Spoken replies kept to one or two sentences; parking/hours/dentists are instant facts (no tool round-trip before speaking)
 
 ## Dev setup
@@ -67,7 +68,7 @@ Then open **http://127.0.0.1:8787**
 | See a branch | Use the Barrack Heights / Dapto / Woonona tabs. Address, phone, hours, parking, and dentists are on the left. |
 | Book | Pick a date, tap **Book** on an open slot, enter name + mobile, confirm. The diary only says confirmed after the mock mutation succeeds. |
 | Reschedule / cancel | On a booked row, **Reschedule** (moves to an open slot that day) or **Cancel**. |
-| Talk to Ava | Tap **Call Ava**. Allow the microphone. The portal mints a LiveKit token on the server (keys never go in frontend source) and dispatches `ava-and-leo`. The **Live call** panel shows the transcript and booking activity as they happen; the diary refreshes when Ava books, reschedules, or cancels. Hang up when finished. |
+| Talk to Ava | Tap **Call Ava**. Allow the microphone. The portal mints a LiveKit token on the server (keys never go in frontend source) and dispatches `ava-and-leo`. The **Live call** panel shows the transcript and booking activity as they happen (LiveKit data packets plus a local HTTP/SSE bus); the diary refreshes when Ava books, reschedules, or cancels. Hang up when finished. |
 
 Auth: empty `PORTAL_PASSWORD` is open **on localhost only**. Set `PORTAL_PASSWORD` before exposing the portal. Do not put LiveKit secrets in the browser.
 

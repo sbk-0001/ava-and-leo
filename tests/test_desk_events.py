@@ -14,9 +14,12 @@ from livekit.agents.llm import ChatMessage, FunctionCall, FunctionCallOutput
 from desk_events import (
     DESK_TOPIC,
     DIARY_MUTATIONS,
+    activity_packet_from_result,
     activity_packets_from_tools,
+    desk_events_url,
     encode_desk_packet,
     publish_desk_packet,
+    stamp_packet,
     transcript_packet,
 )
 
@@ -230,6 +233,42 @@ def test_diary_mutations_are_book_reschedule_cancel() -> None:
         "cancel_appointment",
     }
     assert set(DIARY_MUTATIONS) == expected
+
+
+def test_activity_packet_from_result_is_what_tools_emit() -> None:
+    packet = activity_packet_from_result(
+        "book_appointment",
+        {"name": "Jamie Cole", "reason": "check-up"},
+        {
+            "ok": True,
+            "confirmed": True,
+            "booking_id": "bkg_abc",
+            "date": "2026-09-15",
+            "time": "09:30",
+            "clinician": "Dr Mohit Tolani",
+            "branch_id": "shellharbour",
+        },
+    )
+    assert packet is not None
+    assert packet["action"] == "book_appointment"
+    assert packet["refresh_diary"] is True
+    assert packet["payload"]["booking_id"] == "bkg_abc"
+    assert activity_packet_from_result("book_appointment", {}, {"ok": False}) is None
+    assert activity_packet_from_result("quote_fee", {}, {"ok": True}) is None
+
+
+def test_desk_events_url_defaults_to_local_portal() -> None:
+    assert desk_events_url(env={}) == "http://127.0.0.1:8787/api/desk/events"
+    assert (
+        desk_events_url(env={"PORTAL_URL": "http://127.0.0.1:8787"})
+        == "http://127.0.0.1:8787/api/desk/events"
+    )
+
+
+def test_stamp_packet_adds_id() -> None:
+    stamped = stamp_packet({"type": "activity", "action": "book_appointment"})
+    assert stamped["id"].startswith("desk_")
+    assert stamp_packet({"id": "keep", "type": "activity"})["id"] == "keep"
 
 
 def test_encode_desk_packet_is_json_bytes() -> None:

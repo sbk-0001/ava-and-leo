@@ -50,11 +50,13 @@ def _start_portal() -> str:
 
 def main() -> None:
     url = _start_portal()
+    os.environ.setdefault("PORTAL_URL", url)
     password = os.getenv("PORTAL_PASSWORD", "").strip()
     print()
     print(f"Ava clinic portal: {url}")
     print("  Pick a branch, book in the mock diary, then Call Ava.")
     print("  During the call, watch the Live call panel for transcript and bookings.")
+    print("  Desk activity also uses a local HTTP/SSE bus if LiveKit data is quiet.")
     if password:
         print("  Auth: PORTAL_PASSWORD is set (shared gate).")
     else:

@@ -121,3 +121,47 @@ def test_portal_has_live_call_panel() -> None:
     assert "refresh_diary" in js
     assert "live-transcript" in js
     assert "live-activity" in js
+    assert "EventSource" in js
+    assert "/api/desk/stream" in js
+    assert "/api/desk/events" not in js or "desk/stream" in js
+
+
+def test_desk_http_bus_posts_reach_subscribers() -> None:
+    http, _practice = _client()
+    queue = http.app.state.desk_bus.subscribe()
+    packet = {
+        "type": "activity",
+        "action": "book_appointment",
+        "label": "Booked appointment",
+        "payload": {
+            "name": "Jamie Cole",
+            "time": "09:30",
+            "doctor": "Dr Mohit Tolani",
+            "booking_id": "bkg_1",
+        },
+        "refresh_diary": True,
+        "id": "desk_test_1",
+    }
+    posted = http.post("/api/desk/events", json=packet)
+    assert posted.status_code == 200
+    assert posted.json()["ok"] is True
+    assert queue.get_nowait() == packet
+
+
+def test_desk_http_bus_rejects_junk() -> None:
+    http, _practice = _client()
+    assert http.post("/api/desk/events", json={"nope": True}).status_code == 400
+
+
+def test_desk_stream_requires_sign_in() -> None:
+    practice = PracticeClient(mode="mock")
+    app = create_app(practice=practice, require_auth=True, portal_password="secret")
+    http = TestClient(app)
+    assert http.get("/api/desk/stream").status_code == 401
+    assert (
+        http.post(
+            "/api/desk/events",
+            json={"type": "activity", "action": "book_appointment"},
+        ).status_code
+        == 403
+    )

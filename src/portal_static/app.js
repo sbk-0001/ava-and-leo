@@ -5,6 +5,8 @@ const state = {
   branches: [],
   diary: { slots: [], bookings: [] },
   room: null,
+  deskSource: null,
+  seenDeskIds: new Set(),
 };
 
 const FIELD_LABELS = {
@@ -234,10 +236,12 @@ function escapeHtml(value) {
 function showLiveCall() {
   $("live-transcript").innerHTML = "";
   $("live-activity").innerHTML = "";
+  state.seenDeskIds = new Set();
   $("live-call").classList.remove("hidden");
 }
 
 function hideLiveCall() {
+  closeDeskStream();
   $("live-call").classList.add("hidden");
 }
 
@@ -294,6 +298,10 @@ async function maybeRefreshDiary(packet) {
 
 function handleDeskPacket(packet) {
   if (!packet || typeof packet !== "object") return;
+  if (packet.id) {
+    if (state.seenDeskIds.has(packet.id)) return;
+    state.seenDeskIds.add(packet.id);
+  }
   if (packet.type === "transcript" && packet.text) {
     renderTranscript(packet);
     return;
@@ -301,6 +309,28 @@ function handleDeskPacket(packet) {
   if (packet.type === "activity") {
     renderActivity(packet);
     maybeRefreshDiary(packet).catch(() => {});
+  }
+}
+
+function subscribeDeskStream() {
+  if (state.deskSource) {
+    state.deskSource.close();
+  }
+  const source = new EventSource("/api/desk/stream", { withCredentials: true });
+  source.onmessage = (event) => {
+    try {
+      handleDeskPacket(JSON.parse(event.data));
+    } catch {
+      /* ignore keepalives / malformed */
+    }
+  };
+  state.deskSource = source;
+}
+
+function closeDeskStream() {
+  if (state.deskSource) {
+    state.deskSource.close();
+    state.deskSource = null;
   }
 }
 
@@ -345,6 +375,7 @@ async function callAva() {
     room.on(RoomEvent.Disconnected, () => hangUp(false));
     subscribeDeskFeed(room);
     showLiveCall();
+    subscribeDeskStream();
     await room.connect(token.url, token.token);
     await room.startAudio();
     await room.localParticipant.setMicrophoneEnabled(true);

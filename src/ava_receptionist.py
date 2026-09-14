@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from livekit import api
@@ -14,6 +14,7 @@ from livekit.agents.beta.tools import EndCallTool
 from livekit.plugins import openai
 from openai.types.beta.realtime.session import TurnDetection
 
+from desk_events import activity_packet_from_result, emit_desk_event
 from persona import ava_instructions, get_branch, quote_fee
 from practice import PracticeClient
 from sip_utils import find_sip_participant
@@ -25,6 +26,11 @@ AVA_REALTIME_MODEL = "gpt-realtime"
 # quality voice; cedar is more masculine.
 # Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/
 AVA_DEFAULT_VOICE = "marin"
+# Playback slower than 1.0 so Ava sounds unhurried on the surgery phones.
+# Docs: https://docs.livekit.io/reference/python/livekit/plugins/openai/realtime/
+AVA_REALTIME_SPEED = 0.85
+
+DeskNotify = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 
 def resolve_ava_voice(env: Mapping[str, str] | None = None) -> str:
@@ -47,6 +53,7 @@ def ava_realtime_model() -> openai.realtime.RealtimeModel:
     return openai.realtime.RealtimeModel(
         model=AVA_REALTIME_MODEL,
         voice=resolve_ava_voice(),
+        speed=AVA_REALTIME_SPEED,
         turn_detection=TurnDetection(
             type="server_vad",
             threshold=0.7,
@@ -67,10 +74,12 @@ class AvaReceptionist(Agent):
         branch_id: str,
         practice: PracticeClient,
         transfer_to: str | None = None,
+        on_desk_event: DeskNotify | None = None,
     ) -> None:
         self.branch = get_branch(branch_id)
         self.practice = practice
         self.transfer_to = transfer_to
+        self.on_desk_event = on_desk_event
         end_call_kwargs: dict[str, Any] = {
             "extra_description": (
                 "End the call only after the caller is finished. Confirm they do "
@@ -94,6 +103,29 @@ class AvaReceptionist(Agent):
             tools=end_call.tools,
         )
 
+    def _job_room(self) -> Any:
+        try:
+            return get_job_context().room
+        except Exception:
+            return None
+
+    async def _notify_desk(
+        self, action: str, arguments: dict[str, Any], result: dict[str, Any]
+    ) -> None:
+        """Push booking activity as soon as the practice tool returns.
+
+        Realtime function_tools_executed is not reliable enough for the desk.
+        """
+        packet = activity_packet_from_result(action, arguments, result)
+        if packet is None:
+            return
+        if self.on_desk_event is not None:
+            maybe = self.on_desk_event(packet)
+            if inspect.isawaitable(maybe):
+                await maybe
+            return
+        await emit_desk_event(packet, room=self._job_room())
+
     @function_tool()
     async def find_patient(
         self,
@@ -110,9 +142,15 @@ class AvaReceptionist(Agent):
             date_of_birth: Date of birth if given, preferably YYYY-MM-DD.
         """
         logger.info("find_patient name=%s", name)
-        return await self.practice.find_patient(
+        result = await self.practice.find_patient(
             name=name, phone=phone, date_of_birth=date_of_birth
         )
+        await self._notify_desk(
+            "find_patient",
+            {"name": name, "phone": phone, "date_of_birth": date_of_birth},
+            result,
+        )
+        return result
 
     @function_tool()
     async def get_availability(
@@ -128,9 +166,15 @@ class AvaReceptionist(Agent):
             clinician: Optional dentist name to filter by.
         """
         logger.info("get_availability date=%s clinician=%s", date, clinician)
-        return await self.practice.get_availability(
+        result = await self.practice.get_availability(
             branch_id=self.branch.id, date=date, clinician=clinician
         )
+        await self._notify_desk(
+            "get_availability",
+            {"date": date, "clinician": clinician, "branch_id": self.branch.id},
+            result,
+        )
+        return result
 
     @function_tool()
     async def book_appointment(
@@ -156,7 +200,7 @@ class AvaReceptionist(Agent):
         logger.info(
             "book_appointment slot=%s patient=%s name=%s", slot_id, patient_id, name
         )
-        return await self.practice.book_appointment(
+        result = await self.practice.book_appointment(
             branch_id=self.branch.id,
             slot_id=slot_id,
             reason=reason,
@@ -165,6 +209,20 @@ class AvaReceptionist(Agent):
             phone=phone,
             date_of_birth=date_of_birth,
         )
+        await self._notify_desk(
+            "book_appointment",
+            {
+                "slot_id": slot_id,
+                "reason": reason,
+                "patient_id": patient_id,
+                "name": name,
+                "phone": phone,
+                "date_of_birth": date_of_birth,
+                "branch_id": self.branch.id,
+            },
+            result,
+        )
+        return result
 
     @function_tool()
     async def reschedule_appointment(
@@ -182,9 +240,15 @@ class AvaReceptionist(Agent):
         logger.info(
             "reschedule_appointment booking=%s slot=%s", booking_id, new_slot_id
         )
-        return await self.practice.reschedule_appointment(
+        result = await self.practice.reschedule_appointment(
             booking_id=booking_id, new_slot_id=new_slot_id
         )
+        await self._notify_desk(
+            "reschedule_appointment",
+            {"booking_id": booking_id, "new_slot_id": new_slot_id},
+            result,
+        )
+        return result
 
     @function_tool()
     async def cancel_appointment(
@@ -198,7 +262,11 @@ class AvaReceptionist(Agent):
             booking_id: Existing booking id.
         """
         logger.info("cancel_appointment booking=%s", booking_id)
-        return await self.practice.cancel_appointment(booking_id=booking_id)
+        result = await self.practice.cancel_appointment(booking_id=booking_id)
+        await self._notify_desk(
+            "cancel_appointment", {"booking_id": booking_id}, result
+        )
+        return result
 
     @function_tool()
     async def quote_fee(self, context: RunContext, item: str) -> dict[str, Any]:
@@ -226,12 +294,23 @@ class AvaReceptionist(Agent):
             body: Message for the team.
         """
         logger.info("leave_message name=%s", caller_name)
-        return await self.practice.leave_message(
+        result = await self.practice.leave_message(
             branch_id=self.branch.id,
             caller_name=caller_name,
             phone=phone,
             body=body,
         )
+        await self._notify_desk(
+            "leave_message",
+            {
+                "caller_name": caller_name,
+                "phone": phone,
+                "body": body,
+                "branch_id": self.branch.id,
+            },
+            result,
+        )
+        return result
 
     @function_tool()
     async def emergency(

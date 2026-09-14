@@ -143,6 +143,9 @@ def test_voice_instructions_include_human_affect() -> None:
     assert "ai" in spoken
     assert "one question" in spoken
     assert "one or two sentences" in spoken or "one to two" in spoken
+    assert "unhurried" in spoken or "do not rush" in spoken
+    assert "attractive" in spoken
+    assert "pacing" in spoken
 
 
 def test_backend_instructions_policy_intact() -> None:

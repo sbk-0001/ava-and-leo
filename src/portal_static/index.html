@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Leo desk — Shellharbour Dentists</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div id="login-gate" class="gate hidden">
+      <form id="login-form" class="card gate-card">
+        <p class="eyebrow">Shellharbour Dentists</p>
+        <h1>Leo desk</h1>
+        <p class="muted">Enter the shared portal password to continue.</p>
+        <label>
+          Password
+          <input type="password" id="login-password" autocomplete="current-password" required />
+        </label>
+        <p id="login-error" class="error hidden"></p>
+        <button type="submit">Open desk</button>
+      </form>
+    </div>
+
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Illawarra group</p>
+        <h1>Leo desk</h1>
+      </div>
+      <div class="topbar-actions">
+        <p id="auth-note" class="muted auth-note"></p>
+        <button id="call-leo" type="button" class="call-btn">Call Leo</button>
+        <button id="hang-up" type="button" class="ghost hidden">Hang up</button>
+      </div>
+    </header>
+
+    <div id="call-status" class="call-status hidden" role="status"></div>
+    <div id="remote-audio"></div>
+
+    <nav id="branch-tabs" class="tabs" aria-label="Branches"></nav>
+
+    <main class="layout">
+      <section class="card facts" id="facts">
+        <p class="eyebrow" id="fact-suburb"></p>
+        <h2 id="fact-name"></h2>
+        <dl>
+          <div><dt>Address</dt><dd id="fact-address"></dd></div>
+          <div><dt>Phone</dt><dd id="fact-phone"></dd></div>
+          <div><dt>Hours</dt><dd id="fact-hours"></dd></div>
+          <div><dt>Parking</dt><dd id="fact-parking"></dd></div>
+          <div><dt>Languages</dt><dd id="fact-languages"></dd></div>
+          <div><dt>Cancellation</dt><dd id="fact-cancellation"></dd></div>
+        </dl>
+        <h3>Dentists</h3>
+        <ul id="fact-dentists" class="dentist-list"></ul>
+      </section>
+
+      <section class="card diary">
+        <div class="diary-head">
+          <div>
+            <p class="eyebrow">Mock diary</p>
+            <h2>Appointments</h2>
+          </div>
+          <label class="date-label">
+            Date
+            <input type="date" id="diary-date" />
+          </label>
+        </div>
+        <p id="diary-empty" class="muted hidden">No slots on this date.</p>
+        <div id="slot-list" class="slot-list"></div>
+      </section>
+    </main>
+
+    <dialog id="book-dialog" class="dialog">
+      <form id="book-form" method="dialog" class="card">
+        <h2 id="book-title">Book appointment</h2>
+        <p id="book-slot-label" class="muted"></p>
+        <input type="hidden" id="book-slot-id" />
+        <input type="hidden" id="book-booking-id" />
+        <label>
+          Patient name
+          <input type="text" id="book-name" required autocomplete="name" />
+        </label>
+        <label>
+          Mobile
+          <input type="tel" id="book-phone" required autocomplete="tel" />
+        </label>
+        <label>
+          Reason
+          <input type="text" id="book-reason" value="Check-up" />
+        </label>
+        <p id="book-error" class="error hidden"></p>
+        <div class="dialog-actions">
+          <button type="button" class="ghost" id="book-cancel">Close</button>
+          <button type="submit" id="book-submit">Confirm booking</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

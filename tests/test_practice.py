@@ -1,8 +1,17 @@
 """Mock/disconnected practice software must not invent diary slots."""
 
+from datetime import date, timedelta
+from pathlib import Path
+
 import pytest
 
-from practice import PracticeClient
+from persona import BRANCHES, VERIFY
+from practice import (
+    PracticeClient,
+    practice_from_env,
+    reset_shared_practice,
+    seed_mock_diary,
+)
 
 
 @pytest.mark.asyncio
@@ -70,7 +79,7 @@ async def test_mock_only_returns_seeded_slots() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mock_book_requires_real_slot_then_confirms() -> None:
+async def test_mock_book_reschedule_cancel_confirmed() -> None:
     client = PracticeClient(mode="mock")
     missing = await client.book_appointment(
         branch_id="shellharbour",
@@ -89,6 +98,13 @@ async def test_mock_book_requires_real_slot_then_confirms() -> None:
         time="09:30",
         clinician="Dr Mohit Tolani",
     )
+    client.seed_slot(
+        slot_id="slot-pm",
+        branch_id="shellharbour",
+        date="2026-09-21",
+        time="14:00",
+        clinician="Dr Amy Min",
+    )
     booked = await client.book_appointment(
         branch_id="shellharbour",
         slot_id="slot-am",
@@ -99,11 +115,56 @@ async def test_mock_book_requires_real_slot_then_confirms() -> None:
     assert booked["confirmed"] is True
     assert booked["booking_id"]
 
-    # Slot is consumed; it must not be offered again.
     leftover = await client.get_availability(
         branch_id="shellharbour", date="2026-09-21"
     )
-    assert leftover["slots"] == []
+    assert [slot["slot_id"] for slot in leftover["slots"]] == ["slot-pm"]
+
+    moved = await client.reschedule_appointment(
+        booking_id=booked["booking_id"],
+        new_slot_id="slot-pm",
+    )
+    assert moved["ok"] is True
+    assert moved["confirmed"] is True
+    assert moved["time"] == "14:00"
+    assert moved["clinician"] == "Dr Amy Min"
+
+    after_move = await client.get_availability(
+        branch_id="shellharbour", date="2026-09-21"
+    )
+    assert [slot["slot_id"] for slot in after_move["slots"]] == ["slot-am"]
+
+    cancelled = await client.cancel_appointment(booking_id=booked["booking_id"])
+    assert cancelled["ok"] is True
+    assert cancelled["confirmed"] is True
+
+    reopened = await client.get_availability(
+        branch_id="shellharbour", date="2026-09-21"
+    )
+    assert {slot["slot_id"] for slot in reopened["slots"]} == {"slot-am", "slot-pm"}
+
+
+@pytest.mark.asyncio
+async def test_mock_create_on_book_for_new_patient() -> None:
+    client = PracticeClient(mode="mock")
+    client.seed_slot(
+        slot_id="slot-am",
+        branch_id="shellharbour",
+        date="2026-09-21",
+        time="09:30",
+        clinician="Dr Mohit Tolani",
+    )
+    booked = await client.book_appointment(
+        branch_id="shellharbour",
+        slot_id="slot-am",
+        reason="new patient check up",
+        name="Sam Nguyen",
+        phone="0412 000 111",
+    )
+    assert booked["ok"] is True
+    assert booked["confirmed"] is True
+    found = await client.find_patient(name="Sam Nguyen", phone="0412000111")
+    assert len(found["patients"]) == 1
 
 
 @pytest.mark.asyncio
@@ -117,3 +178,72 @@ async def test_find_patient_does_not_invent_records() -> None:
     found = await client.find_patient(name="alex taylor", phone="0411 111 111")
     assert len(found["patients"]) == 1
     assert found["patients"][0]["patient_id"] == "p1"
+
+
+def test_seeded_diary_uses_real_dentists_and_branch_hours() -> None:
+    client = PracticeClient(mode="mock")
+    today = date(2026, 9, 14)  # Monday
+    created = seed_mock_diary(client, today=today, days=14)
+    assert created > 0
+
+    monday = today.isoformat()
+    sh_slots = [
+        slot
+        for slot in client.slots.values()
+        if slot.branch_id == "shellharbour" and slot.date == monday
+    ]
+    assert sh_slots
+    assert all(slot.time >= "08:00" and slot.time < "17:00" for slot in sh_slots)
+    sh_names = {
+        slot.clinician
+        for slot in client.slots.values()
+        if slot.branch_id == "shellharbour"
+    }
+    for dentist in BRANCHES["shellharbour"].dentists:
+        if dentist != VERIFY:
+            assert dentist in sh_names
+
+    saturday = (today + timedelta(days=5)).isoformat()
+    dapto_sat = [
+        slot
+        for slot in client.slots.values()
+        if slot.branch_id == "dapto" and slot.date == saturday
+    ]
+    assert dapto_sat
+    assert all(slot.time >= "08:00" and slot.time < "16:00" for slot in dapto_sat)
+
+    woonona_sat = [
+        slot
+        for slot in client.slots.values()
+        if slot.branch_id == "woonona" and slot.date == saturday
+    ]
+    assert woonona_sat
+    assert all(slot.time >= "08:00" and slot.time < "17:00" for slot in woonona_sat)
+
+
+def test_mock_diary_persists_to_json(tmp_path: Path) -> None:
+    path = tmp_path / "diary.json"
+    client = PracticeClient(mode="mock", persist_path=path)
+    seed_mock_diary(client, today=date(2026, 9, 14), days=7)
+    client.save()
+    assert path.exists()
+
+    restored = PracticeClient(mode="mock", persist_path=path)
+    restored.load()
+    assert restored.slots
+    assert set(restored.slots) == set(client.slots)
+
+
+def test_practice_from_env_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    reset_shared_practice()
+    monkeypatch.delenv("PRACTICE_SOFTWARE", raising=False)
+    local = practice_from_env(is_telephony=False, persist=False)
+    assert local.mode == "mock"
+    reset_shared_practice()
+    telephony = practice_from_env(is_telephony=True, persist=False)
+    assert telephony.mode == "disconnected"
+    reset_shared_practice()
+    monkeypatch.setenv("PRACTICE_SOFTWARE", "mock")
+    forced = practice_from_env(is_telephony=True, persist=False)
+    assert forced.mode == "mock"
+    reset_shared_practice()

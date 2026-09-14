@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import os
+from collections.abc import Mapping
 from typing import Any
 
 from livekit import api
@@ -18,7 +20,16 @@ from sip_utils import find_sip_participant
 logger = logging.getLogger("leo")
 
 LEO_REALTIME_MODEL = "gpt-realtime"
-LEO_DEFAULT_VOICE = "cedar"
+# OpenAI Realtime has no AU-specific voice. marin is the recommended feminine
+# quality voice; cedar is more masculine.
+# Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/
+LEO_DEFAULT_VOICE = "marin"
+
+
+def resolve_leo_voice(env: Mapping[str, str] | None = None) -> str:
+    environ = env if env is not None else os.environ
+    voice = str(environ.get("LEO_REALTIME_VOICE", LEO_DEFAULT_VOICE)).strip()
+    return voice or LEO_DEFAULT_VOICE
 
 
 def leo_realtime_model() -> openai.realtime.RealtimeModel:
@@ -26,10 +37,9 @@ def leo_realtime_model() -> openai.realtime.RealtimeModel:
 
     Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/
     """
-    voice = (
-        os.getenv("LEO_REALTIME_VOICE", LEO_DEFAULT_VOICE).strip() or LEO_DEFAULT_VOICE
+    return openai.realtime.RealtimeModel(
+        model=LEO_REALTIME_MODEL, voice=resolve_leo_voice()
     )
-    return openai.realtime.RealtimeModel(model=LEO_REALTIME_MODEL, voice=voice)
 
 
 class LeoReceptionist(Agent):
@@ -45,18 +55,23 @@ class LeoReceptionist(Agent):
         self.branch = get_branch(branch_id)
         self.practice = practice
         self.transfer_to = transfer_to
-        end_call = EndCallTool(
-            extra_description=(
+        end_call_kwargs: dict[str, Any] = {
+            "extra_description": (
                 "End the call only after the caller is finished. Confirm they do "
                 "not need anything else, then say goodbye in Australian English."
             ),
-            delete_room=True,
-            end_instructions=(
+            "delete_room": True,
+            "end_instructions": (
                 "Thank them briefly in Australian English and say goodbye. "
                 "Keep it to one short sentence."
             ),
-            ignore_on_enter=True,
-        )
+        }
+        # Hide end_call during greeting. Older SDKs omit this kwarg; passing it
+        # blindly TypeErrors and crashes console. Docs:
+        # https://docs.livekit.io/agents/prebuilt/tools/end-call-tool/
+        if "ignore_on_enter" in inspect.signature(EndCallTool.__init__).parameters:
+            end_call_kwargs["ignore_on_enter"] = True
+        end_call = EndCallTool(**end_call_kwargs)
         super().__init__(
             instructions=leo_instructions(self.branch.id),
             llm=leo_realtime_model(),
@@ -106,22 +121,33 @@ class LeoReceptionist(Agent):
         self,
         context: RunContext,
         slot_id: str,
-        patient_id: str,
         reason: str,
+        patient_id: str | None = None,
+        name: str | None = None,
+        phone: str | None = None,
+        date_of_birth: str | None = None,
     ) -> dict[str, Any]:
         """Book a diary slot returned by get_availability. Say confirmed only if confirmed is true.
 
         Args:
             slot_id: Slot id from get_availability.
-            patient_id: Patient id from find_patient.
             reason: Short reason for the visit.
+            patient_id: Patient id from find_patient, if known.
+            name: Full name for a new patient when no patient_id exists.
+            phone: Mobile for a new patient.
+            date_of_birth: Date of birth if given, preferably YYYY-MM-DD.
         """
-        logger.info("book_appointment slot=%s patient=%s", slot_id, patient_id)
+        logger.info(
+            "book_appointment slot=%s patient=%s name=%s", slot_id, patient_id, name
+        )
         return await self.practice.book_appointment(
             branch_id=self.branch.id,
             slot_id=slot_id,
-            patient_id=patient_id,
             reason=reason,
+            patient_id=patient_id,
+            name=name,
+            phone=phone,
+            date_of_birth=date_of_birth,
         )
 
     @function_tool()

@@ -1,7 +1,10 @@
 """Inbound DID mapping and SIP disconnect shutdown rules."""
 
+from unittest.mock import MagicMock
+
 from sip_utils import (
     branch_from_did,
+    branch_from_participant,
     normalize_au_phone,
     parse_job_metadata,
     parse_sip_did_map,
@@ -69,3 +72,11 @@ def test_shutdown_on_disconnect_reasons() -> None:
     assert should_shutdown_on_disconnect("CLIENT_INITIATED") is False
     assert should_shutdown_on_disconnect("USER_REJECTED") is False
     assert should_shutdown_on_disconnect("ROOM_DELETED") is False
+
+
+def test_magicmock_participant_did_does_not_crash() -> None:
+    """Console / tests may pass a MagicMock participant with no real SIP DID."""
+    participant = MagicMock()
+    assert branch_from_participant(participant) == "shellharbour"
+    assert normalize_au_phone(MagicMock()) == ""
+    assert normalize_au_phone(None) == ""

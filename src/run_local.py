@@ -52,7 +52,7 @@ def main() -> None:
     url = _start_portal()
     password = os.getenv("PORTAL_PASSWORD", "").strip()
     print()
-    print(f"Strategybyte Ava desk: {url}")
+    print(f"byte voice Ava desk: {url}")
     print("  Pick a branch, book in the mock diary, then Call Ava.")
     if password:
         print("  Auth: PORTAL_PASSWORD is set (shared gate).")

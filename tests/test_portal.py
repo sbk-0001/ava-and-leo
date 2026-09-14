@@ -12,7 +12,38 @@ from portal import COOKIE_NAME, create_app
 from practice import PracticeClient, seed_mock_diary
 
 STATIC_DIR = Path(__file__).resolve().parents[1] / "src" / "portal_static"
-STRATEGYBYTE_COLORS = ("#091736", "#FFC605", "#0061FF", "#FFEFD7")
+BYTE_VOICE_COLORS = (
+    "#05060a",
+    "#0b0f1a",
+    "#f4f7ff",
+    "#8b93a7",
+    "#4dfff0",
+    "#8b5cff",
+    "#ff4d9a",
+)
+LEGACY_STRATEGYBYTE_COLORS = ("#091736", "#FFC605", "#FFEFD7")
+REQUIRED_PORTAL_IDS = (
+    "login-gate",
+    "login-form",
+    "login-password",
+    "login-error",
+    "auth-note",
+    "call-ava",
+    "hang-up",
+    "call-status",
+    "remote-audio",
+    "branch-tabs",
+    "facts",
+    "fact-suburb",
+    "fact-name",
+    "diary-date",
+    "diary-empty",
+    "slot-list",
+    "book-dialog",
+    "book-form",
+    "book-slot-id",
+    "book-submit",
+)
 
 
 def _client() -> tuple[TestClient, PracticeClient]:
@@ -110,17 +141,30 @@ def test_portal_token_dispatches_dental_realtime_receptionist(monkeypatch) -> No
     assert agent_name == "ava-and-leo"
 
 
-def test_portal_static_is_strategybyte_branded() -> None:
+def test_portal_static_is_byte_voice_branded() -> None:
     html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     css = (STATIC_DIR / "styles.css").read_text(encoding="utf-8")
     branded = html + css
-    for color in STRATEGYBYTE_COLORS:
-        assert color in branded, f"missing Strategybyte color {color}"
-    assert "Strategybyte" in html
+    branded_lower = branded.lower()
+    for color in BYTE_VOICE_COLORS:
+        assert color in branded_lower, f"missing byte voice color {color}"
+    for color in LEGACY_STRATEGYBYTE_COLORS:
+        assert color.lower() not in branded_lower
+    assert "byte voice" in html
+    assert "Strategybyte" not in html
+    assert "Strategybyte" not in css
     assert "Ava desk" in html
     assert "Call Ava" in html
     assert 'id="call-ava"' in html
     assert "Call Leo" not in html
+    assert "family=Syne" in html or "family=syne" in html
+    assert "family=Manrope" in html or "family=manrope" in html
+    assert "prefers-reduced-motion" in css
+    assert "@keyframes" in css
+    assert ".call-btn.live" in css
+    assert ".slot:hover" in css or ".slot.open:hover" in css
+    for element_id in REQUIRED_PORTAL_IDS:
+        assert f'id="{element_id}"' in html, f"missing portal id {element_id}"
 
 
 def test_portal_js_plays_remote_audio_and_keeps_call_ava() -> None:
@@ -137,7 +181,7 @@ def test_portal_js_plays_remote_audio_and_keeps_call_ava() -> None:
     assert "TrackSubscribed" in js
 
 
-def test_portal_http_serves_strategybyte_static() -> None:
+def test_portal_http_serves_byte_voice_static() -> None:
     http, _practice = _client()
     page = http.get("/")
     css = http.get("/static/styles.css")
@@ -146,12 +190,22 @@ def test_portal_http_serves_strategybyte_static() -> None:
     assert css.status_code == 200
     assert js.status_code == 200
     assert "Call Ava" in page.text
-    assert "Strategybyte" in page.text
+    assert "byte voice" in page.text
+    assert "Strategybyte" not in page.text
     assert "Ava desk" in page.text
-    for color in STRATEGYBYTE_COLORS:
-        assert color in css.text
+    for color in BYTE_VOICE_COLORS:
+        assert color in css.text.lower()
     assert "call-ava" in js.text
     assert "remoteParticipants" in js.text
+    assert "--i" in js.text
+
+
+def test_portal_config_brand_is_byte_voice() -> None:
+    http, _practice = _client()
+    body = http.get("/api/config").json()
+    assert body["brand"] == "byte voice"
+    assert body["product"] == "Ava desk"
+    assert body["call_label"] == "Call Ava"
 
 
 def test_portal_requires_password_when_not_localhost() -> None:

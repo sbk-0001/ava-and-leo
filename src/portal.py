@@ -1,4 +1,4 @@
-"""Clinic-staff web portal for Strategybyte Ava desk.
+"""Clinic-staff web portal for the byte voice Ava desk.
 
 Serves branch facts, the mock diary, booking mutations, and a LiveKit token
 so the browser can talk to the dental Realtime receptionist. Secrets stay
@@ -82,7 +82,7 @@ def create_app(
     portal_password: str | None = None,
 ) -> FastAPI:
     """Build the portal app. Tests pass an in-memory PracticeClient."""
-    app = FastAPI(title="Strategybyte — Ava desk", docs_url=None)
+    app = FastAPI(title="byte voice — Ava desk", docs_url=None)
     app.state.practice = practice
     app.state.portal_password = (
         portal_password
@@ -152,7 +152,7 @@ def create_app(
             "persona": "leo",
             "voice": os.getenv("LEO_REALTIME_VOICE", "marin") or "marin",
             "practice_mode": _practice().mode,
-            "brand": "Strategybyte",
+            "brand": "byte voice",
             "product": "Ava desk",
             "call_label": "Call Ava",
             "diary_store": getattr(_practice(), "store_kind", "memory"),

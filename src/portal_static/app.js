@@ -103,6 +103,7 @@ function renderDiary() {
     const booking = slot.taken ? bookingForSlot(slot.slot_id) : null;
     const row = document.createElement("article");
     row.className = `slot ${slot.taken ? "taken" : "open"}`;
+    row.style.setProperty("--i", String(list.children.length));
     const who = booking
       ? `${booking.patient_name} · ${booking.reason}`
       : "Open";
@@ -276,6 +277,7 @@ async function unlockAudioPlayback() {
 async function callAva() {
   setCallStatus("Connecting to Ava…");
   $("call-ava").classList.add("live");
+  document.body.classList.add("call-live");
   try {
     const { Room, RoomEvent } = livekitSdk();
     await unlockAudioPlayback();
@@ -314,6 +316,7 @@ async function callAva() {
     );
   } catch (error) {
     $("call-ava").classList.remove("live");
+    document.body.classList.remove("call-live");
     setCallStatus(error.message || "Could not connect. Is the agent worker running?");
   }
 }
@@ -324,6 +327,7 @@ async function hangUp(disconnect = true) {
   }
   state.room = null;
   $("call-ava").classList.remove("live");
+  document.body.classList.remove("call-live");
   $("hang-up").classList.add("hidden");
   $("remote-audio").innerHTML = "";
   setCallStatus("Call ended.", true);

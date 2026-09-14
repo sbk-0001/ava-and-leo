@@ -41,7 +41,7 @@ lk app env --write --destination .env.local
 
 ### Local clinic portal (agent + diary + Call Ava)
 
-One command starts the mock diary, the dental receptionist worker, and the Strategybyte Ava desk:
+One command starts the mock diary, the dental receptionist worker, and the byte voice Ava desk:
 
 ```bash
 # .env.local should include LIVEKIT_*, OPENAI_API_KEY
@@ -140,7 +140,7 @@ src/persona.py        # Leo prompts, branches, fees (source of truth)
 src/leo.py            # LeoReceptionist + office-system tools
 src/practice.py       # disconnected / mock practice software
 src/diary_store.py    # file / Redis / optional Supabase diary backends
-src/portal.py         # FastAPI Strategybyte Ava desk
+src/portal.py         # FastAPI byte voice Ava desk
 src/main.py           # Vercel FastAPI entrypoint
 src/portal_static/    # portal UI
 src/run_local.py      # one-command agent + portal
@@ -165,7 +165,7 @@ The [LiveKit CLI](https://docs.livekit.io/intro/basics/cli/) `lk docs` subcomman
 
 ## Share with a partner
 
-Give the partner the **same Strategybyte Ava desk** and the **same Call Ava voice** as a local demo — not a tunnel to a Mac. Host two things:
+Give the partner the **same byte voice Ava desk** and the **same Call Ava voice** as a local demo — not a tunnel to a Mac. Host two things:
 
 1. **LiveKit Cloud agent** — the Realtime dental receptionist (`agent_name` `ava-and-leo`)
 2. **Vercel portal** — public URL + `PORTAL_PASSWORD`
@@ -207,9 +207,9 @@ Cloud injects `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET`. Do not
 
 **Stop the local Mac worker** (`run_local.py` / `src/agent.py dev`) while the cloud agent is live. Two workers (double workers) both register as `ava-and-leo` and steal jobs from each other. To run a second agent in the same project you must change `agent_name` in source and redeploy — do not do that for this partner share.
 
-### 2. Deploy the Strategybyte portal to Vercel
+### 2. Deploy the byte voice portal to Vercel
 
-The desk is FastAPI (`src/portal.py`, Vercel entry `src/main.py`). Brand: navy `#091736`, gold `#FFC605`, blue `#0061FF`, cream `#FFEFD7`.
+The desk is FastAPI (`src/portal.py`, Vercel entry `src/main.py`). Brand: void `#05060a`, surface `#0b0f1a`, cyan `#4dfff0`, violet `#8b5cff`, live magenta `#ff4d9a`.
 
 ```bash
 # From the repo root. Or Import the GitHub repo in the Vercel dashboard.

@@ -3,21 +3,33 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ava desk — Strategybyte</title>
+    <meta name="theme-color" content="#05060a" />
+    <title>Ava desk — byte voice</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Syne:wght@500;600;700;800&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
+    <div class="atmosphere" aria-hidden="true">
+      <div class="aurora"></div>
+      <div class="orb orb-cyan"></div>
+      <div class="orb orb-violet"></div>
+      <div class="orb orb-magenta"></div>
+      <div class="grid-fade"></div>
+    </div>
+
     <div id="login-gate" class="gate hidden">
-      <form id="login-form" class="card gate-card">
-        <p class="eyebrow">Strategybyte</p>
+      <form id="login-form" class="card gate-card fade-up">
+        <p class="eyebrow">byte voice</p>
         <h1>Ava desk</h1>
-        <p class="muted">Enter the shared portal password to continue.</p>
+        <p class="muted">
+          Voice-AI command desk for Shellharbour Dentists. Enter the shared
+          portal password to continue.
+        </p>
         <label>
           Password
           <input type="password" id="login-password" autocomplete="current-password" required />
@@ -27,10 +39,13 @@
       </form>
     </div>
 
-    <header class="topbar">
-      <div>
-        <p class="eyebrow">Strategybyte</p>
-        <h1>Ava desk</h1>
+    <header class="topbar fade-up">
+      <div class="brand">
+        <span class="brand-orb" aria-hidden="true"></span>
+        <div>
+          <p class="eyebrow">byte voice</p>
+          <h1>Ava desk</h1>
+        </div>
       </div>
       <div class="topbar-actions">
         <p id="auth-note" class="muted auth-note"></p>
@@ -38,15 +53,15 @@
         <button id="hang-up" type="button" class="ghost hidden">Hang up</button>
       </div>
     </header>
-    <div class="gold-bar" aria-hidden="true"></div>
+    <div class="accent-bar" aria-hidden="true"></div>
 
     <div id="call-status" class="call-status hidden" role="status"></div>
     <div id="remote-audio" hidden></div>
 
-    <nav id="branch-tabs" class="tabs" aria-label="Branches"></nav>
+    <nav id="branch-tabs" class="tabs fade-up delay-1" aria-label="Branches"></nav>
 
     <main class="layout">
-      <section class="card facts" id="facts">
+      <section class="card facts fade-up delay-2" id="facts">
         <p class="eyebrow" id="fact-suburb"></p>
         <h2 id="fact-name"></h2>
         <dl>
@@ -61,7 +76,7 @@
         <ul id="fact-dentists" class="dentist-list"></ul>
       </section>
 
-      <section class="card diary">
+      <section class="card diary fade-up delay-3">
         <div class="diary-head">
           <div>
             <p class="eyebrow">Mock diary</p>

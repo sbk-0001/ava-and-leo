@@ -15,7 +15,13 @@ Ava is the phone receptionist for the Shellharbour Dentists group (Barrack Heigh
 
 Unset `AGENT_PERSONA` defaults to **ava on telephony** (SIP inbound or outbound) and **generic** on web/console. The clinic portal always dispatches Ava (`persona: ava` in the room token).
 
-Ava's spoken style, branch facts, fee catalogue, and tool rules live in [`src/persona.py`](src/persona.py). Parking, hours, and dentist names are filled from the official sites (2026-09-14). Fields marked `VERIFY` are unknown — Ava must not invent them. Say **confirmed** only after a book/reschedule/cancel tool returns `confirmed: true`.
+Ava's spoken style, branch facts, fee catalogue, suburb routing, mock weekday roster, and tool rules live in [`src/persona.py`](src/persona.py). Parking, hours, and dentist names are filled from the official sites (2026-09-14). Fields marked `VERIFY` are unknown — Ava must not invent them. Say **confirmed** only after a book/reschedule/cancel tool returns `confirmed: true`.
+
+Callers are not locked to the clinic they dialled. Ava greets as the Shellharbour Dentists group, captures the reason for the call, asks which suburb they are near, suggests the nearest clinic and dentists rostered there that day, and if a preferred dentist (for example Dr Mohit Tolani) is at another group clinic that day, she offers the farther site. The mock diary seeds slots from that weekday roster so a Monday Dapto-area caller who wants Dr Mohit is offered Shellharbour (Barrack Heights).
+
+## Voice: marin
+
+OpenAI Realtime has **no Australian-specific voice**. Built-in IDs (do not invent others) are `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, and `cedar` — see the [LiveKit OpenAI Realtime plugin](https://docs.livekit.io/agents/models/realtime/plugins/openai/) and [OpenAI voice options](https://developers.openai.com/docs/guides/realtime-conversations#voice-options). OpenAI recommends **marin** or **cedar** for best quality on `gpt-realtime`; marin is the feminine pair. Older female-leaning voices (`coral`, `shimmer`, `sage`) are lower quality on this model. Ava stays on **marin**; NSW/Illawarra English comes from persona instructions.
 
 ## Low-latency Realtime (not zero latency)
 
@@ -24,7 +30,7 @@ Ava stays on OpenAI Realtime speech-to-speech. Settings aimed at snappy, interru
 - Server VAD with `silence_duration_ms=400` and `threshold=0.7` (telephony-friendly)
 - `interrupt_response=True` so the caller can barge in
 - `AgentSession` `turn_detection="realtime_llm"` with interruptions enabled
-- Spoken replies kept to one or two sentences; parking/hours/dentists are instant facts (no tool round-trip before speaking)
+- Spoken replies kept to one or two sentences; parking/hours/listed dentists are instant facts (no tool round-trip before speaking). Today's roster and diary slots always use tools.
 
 ## Dev setup
 
@@ -132,16 +138,16 @@ uv run python src/make_call.py --to +61400000000 --branch dapto
 
 The script [dispatches](https://docs.livekit.io/agents/server/agent-dispatch/) agent `ava-and-leo` and calls [`CreateSIPParticipant`](https://docs.livekit.io/telephony/making-calls/outbound-calls/) with `wait_until_answered=True`. Failed dials raise `TwirpError` / `SipCallError` (busy, no answer, trunk failure). Mid-call hangups are handled per [SIP disconnect docs](https://docs.livekit.io/telephony/making-calls/outbound-calls/#mid-call-disconnections): `USER_UNAVAILABLE` and `SIP_TRUNK_FAILURE` explicitly shut down the job.
 
-On outbound, Ava waits for the callee to speak first. On inbound, Ava greets as the mapped branch.
+On outbound, Ava waits for the callee to speak first. On inbound, Ava greets as the Shellharbour Dentists group (the dialled DID is a hint, not a lock).
 
 ## Tests
 
 ```bash
-uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py -v
+uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_routing.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py -v
 uv run pytest            # includes generic-pipeline evals; needs LIVEKIT_* in CI
 ```
 
-Unit tests cover persona switching, Ava naming, human VOICE_INSTRUCTIONS, branch facts (parking/hours/dentists), canned fees, DID mapping (including a MagicMock console participant), mock book/reschedule/cancel `confirmed=true`, and the marin voice default.
+Unit tests cover persona switching, Ava naming, human VOICE_INSTRUCTIONS, suburb → clinic routing, cross-clinic preferred-dentist offers, branch facts (parking/hours/dentists), canned fees, DID mapping (including a MagicMock console participant), mock book/reschedule/cancel `confirmed=true`, roster-aware diary seeding, and the marin voice default.
 
 ## Layout
 

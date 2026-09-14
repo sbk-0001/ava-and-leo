@@ -27,19 +27,22 @@ def test_end_call_tool_ignores_on_enter() -> None:
     assert "ignore_on_enter" in inspect.signature(EndCallTool.__init__).parameters
 
 
-def test_inbound_greeting_is_ava_and_human() -> None:
-    """First line is Ava, warm, one short sentence plus one question."""
+def test_inbound_greeting_is_ava_group_not_single_clinic() -> None:
+    """First line is Ava for the group, not locked to the dialled branch."""
     text = inbound_greeting_instructions("dapto")
     lowered = text.lower()
     assert "ava" in lowered
     assert "leo" not in lowered
-    assert "dapto dentists" in lowered
+    assert "shellharbour dentists group" in lowered
     assert "dapto" in lowered
+    assert "barrack heights" in lowered
+    assert "woonona" in lowered
     assert "warm" in lowered or "human" in lowered
-    assert "booking" in lowered
+    assert "lock" in lowered or "hint" in lowered
+    assert "byte voice" in lowered
     assert "one" in lowered and "question" in lowered
     assert "short" in lowered
-    assert len(text) < 400
+    assert len(text) < 700
 
 
 def test_ava_session_uses_realtime_llm_and_interruptions() -> None:
@@ -64,3 +67,21 @@ def test_realtime_model_enables_barge_in_and_snappy_vad() -> None:
     assert "silence_duration_ms" in source
     assert "400" in source
     assert "create_response" in source
+
+
+def test_routing_tools_are_wired_on_ava() -> None:
+    source = inspect.getsource(AvaReceptionist)
+    assert "lookup_nearby_clinics" in source
+    assert "lookup_clinician" in source
+    assert "branch_id" in inspect.getsource(AvaReceptionist.get_availability)
+    assert "branch_id" in inspect.getsource(AvaReceptionist.book_appointment)
+
+
+def test_default_voice_choice_is_documented_marin() -> None:
+    """marin stays: no AU Realtime voice exists; it is the recommended feminine ID."""
+    import ava_receptionist as module
+
+    source = inspect.getsource(module)
+    assert 'AVA_DEFAULT_VOICE = "marin"' in source
+    assert "coral" in source.lower()
+    assert "no AU-specific" in source or "no au-specific" in source.lower()

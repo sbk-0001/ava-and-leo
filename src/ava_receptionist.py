@@ -14,16 +14,30 @@ from livekit.agents.beta.tools import EndCallTool
 from livekit.plugins import openai
 from openai.types.beta.realtime.session import TurnDetection
 
-from persona import ava_instructions, get_branch, quote_fee
+from persona import (
+    ava_instructions,
+    get_branch,
+    quote_fee,
+    suggest_clinics_for_location,
+)
+from persona import (
+    lookup_clinician as lookup_clinician_across_group,
+)
 from practice import PracticeClient
 from sip_utils import find_sip_participant
 
 logger = logging.getLogger("ava")
 
 AVA_REALTIME_MODEL = "gpt-realtime"
-# OpenAI Realtime has no AU-specific voice. marin is the recommended feminine
-# quality voice; cedar is more masculine.
-# Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/
+# OpenAI Realtime built-in voices (do not invent IDs): alloy, ash, ballad,
+# coral, echo, sage, shimmer, verse, marin, cedar.
+# LiveKit plugin: https://docs.livekit.io/agents/models/realtime/plugins/openai/
+# OpenAI voice list: https://developers.openai.com/docs/guides/realtime-conversations#voice-options
+# There is no AU-specific Realtime voice. OpenAI recommends marin or cedar for
+# best quality on gpt-realtime; marin is the feminine pair, cedar the masculine.
+# Older female-leaning voices (coral, shimmer, sage) are lower quality on this
+# model. Keep marin for a soft, warm, energetic female receptionist; Australian
+# English comes from persona instructions, not a different voice ID.
 AVA_DEFAULT_VOICE = "marin"
 
 
@@ -115,21 +129,69 @@ class AvaReceptionist(Agent):
         )
 
     @function_tool()
+    async def lookup_nearby_clinics(
+        self,
+        context: RunContext,
+        location: str,
+        date: str | None = None,
+    ) -> dict[str, Any]:
+        """Rank group clinics for the caller's suburb and list dentists rostered that day.
+
+        Args:
+            location: Suburb or area they said, e.g. Dapto, Warilla, Woonona.
+            date: Optional YYYY-MM-DD. Defaults to today in Australia/Sydney.
+        """
+        logger.info("lookup_nearby_clinics location=%s date=%s", location, date)
+        return suggest_clinics_for_location(location, on_date=date)
+
+    @function_tool()
+    async def lookup_clinician(
+        self,
+        context: RunContext,
+        name: str,
+        date: str | None = None,
+        near_branch_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Find where a preferred dentist is listed and rostered today.
+
+        If they are not at the nearest clinic today but are at another group
+        clinic, offer_other_clinic explains that farther site. Never invent a dentist.
+
+        Args:
+            name: Dentist name as the caller said it, e.g. Dr Mohit Tolani.
+            date: Optional YYYY-MM-DD. Defaults to today in Australia/Sydney.
+            near_branch_id: Nearest clinic id from lookup_nearby_clinics, if known.
+        """
+        logger.info(
+            "lookup_clinician name=%s date=%s near=%s", name, date, near_branch_id
+        )
+        return lookup_clinician_across_group(
+            name, on_date=date, near_branch_id=near_branch_id
+        )
+
+    @function_tool()
     async def get_availability(
         self,
         context: RunContext,
         date: str,
+        branch_id: str | None = None,
         clinician: str | None = None,
     ) -> dict[str, Any]:
         """Check diary availability. Only returns real slots; never invent times.
 
         Args:
             date: Requested date in YYYY-MM-DD.
+            branch_id: Clinic id (shellharbour, dapto, woonona). Omit to search the group.
             clinician: Optional dentist name to filter by.
         """
-        logger.info("get_availability date=%s clinician=%s", date, clinician)
+        logger.info(
+            "get_availability date=%s branch=%s clinician=%s",
+            date,
+            branch_id,
+            clinician,
+        )
         return await self.practice.get_availability(
-            branch_id=self.branch.id, date=date, clinician=clinician
+            branch_id=branch_id, date=date, clinician=clinician
         )
 
     @function_tool()
@@ -138,6 +200,7 @@ class AvaReceptionist(Agent):
         context: RunContext,
         slot_id: str,
         reason: str,
+        branch_id: str | None = None,
         patient_id: str | None = None,
         name: str | None = None,
         phone: str | None = None,
@@ -148,16 +211,21 @@ class AvaReceptionist(Agent):
         Args:
             slot_id: Slot id from get_availability.
             reason: Short reason for the visit.
+            branch_id: Clinic id for that slot. Optional if the slot already has a branch.
             patient_id: Patient id from find_patient, if known.
             name: Full name for a new patient when no patient_id exists.
             phone: Mobile for a new patient.
             date_of_birth: Date of birth if given, preferably YYYY-MM-DD.
         """
         logger.info(
-            "book_appointment slot=%s patient=%s name=%s", slot_id, patient_id, name
+            "book_appointment slot=%s branch=%s patient=%s name=%s",
+            slot_id,
+            branch_id,
+            patient_id,
+            name,
         )
         return await self.practice.book_appointment(
-            branch_id=self.branch.id,
+            branch_id=branch_id,
             slot_id=slot_id,
             reason=reason,
             patient_id=patient_id,
@@ -201,14 +269,20 @@ class AvaReceptionist(Agent):
         return await self.practice.cancel_appointment(booking_id=booking_id)
 
     @function_tool()
-    async def quote_fee(self, context: RunContext, item: str) -> dict[str, Any]:
+    async def quote_fee(
+        self,
+        context: RunContext,
+        item: str,
+        branch_id: str | None = None,
+    ) -> dict[str, Any]:
         """Quote a canned fee only. If unverified, do not invent a price.
 
         Args:
             item: Treatment or item the caller asked about, e.g. check-up, filling, emergency consult.
+            branch_id: Clinic id if known; defaults to the dialled hint branch.
         """
-        logger.info("quote_fee item=%s", item)
-        return quote_fee(item, self.branch.id)
+        logger.info("quote_fee item=%s branch=%s", item, branch_id)
+        return quote_fee(item, branch_id or self.branch.id)
 
     @function_tool()
     async def leave_message(
@@ -217,6 +291,7 @@ class AvaReceptionist(Agent):
         caller_name: str,
         phone: str,
         body: str,
+        branch_id: str | None = None,
     ) -> dict[str, Any]:
         """Leave a message for the practice team.
 
@@ -224,10 +299,11 @@ class AvaReceptionist(Agent):
             caller_name: Caller's name.
             phone: Call-back number.
             body: Message for the team.
+            branch_id: Clinic id if known; defaults to the dialled hint branch.
         """
         logger.info("leave_message name=%s", caller_name)
         return await self.practice.leave_message(
-            branch_id=self.branch.id,
+            branch_id=branch_id or self.branch.id,
             caller_name=caller_name,
             phone=phone,
             body=body,
@@ -317,8 +393,10 @@ class AvaReceptionist(Agent):
 def inbound_greeting_instructions(branch_id: str) -> str:
     branch = get_branch(branch_id)
     return (
-        "Sound warm and human, like a real receptionist picking up — not a script. "
-        f"Greet the caller as Ava at {branch.trading_name} in {branch.suburb}. "
-        "One warm short sentence plus one question. Offer to help with a booking "
-        "or a question. Do not say G'day."
+        "Sound warm, soft, and human, like a real receptionist picking up — not a script. "
+        "Greet the caller as Ava for the Shellharbour Dentists group. Mention that you "
+        "cover Barrack Heights, Dapto, and Woonona. Do not lock them to one clinic first. "
+        f"They may have dialled {branch.trading_name} — treat that as a hint only. "
+        "One warm short sentence plus one question about how you can help. Do not say "
+        "byte voice or G'day."
     )

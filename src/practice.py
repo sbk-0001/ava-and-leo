@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from persona import BRANCHES, VERIFY
+from persona import BRANCHES, VERIFY, resolve_clinician, rostered_clinicians
 
 PracticeMode = Literal["disconnected", "mock"]
 SYDNEY = ZoneInfo("Australia/Sydney")
@@ -212,29 +212,66 @@ class PracticeClient:
     async def get_availability(
         self,
         *,
-        branch_id: str,
         date: str,
+        branch_id: str | None = None,
         clinician: str | None = None,
     ) -> dict[str, Any]:
         if self.mode == "disconnected":
             return self._unavailable("get_availability")
 
-        slots = [
-            {
-                "slot_id": slot.slot_id,
-                "date": slot.date,
-                "time": slot.time,
-                "clinician": slot.clinician,
-                "branch_id": slot.branch_id,
-            }
-            for slot in self.slots.values()
-            if not slot.taken
-            and slot.branch_id == branch_id
-            and slot.date == date
-            and (not clinician or _norm_text(slot.clinician) == _norm_text(clinician))
-        ]
-        slots.sort(key=lambda item: (item["time"], item["clinician"]))
-        return {"ok": True, "slots": slots, "date": date, "branch_id": branch_id}
+        wanted_branch: str | None = None
+        if branch_id:
+            key = branch_id.strip().lower()
+            if key not in BRANCHES:
+                return {
+                    "ok": False,
+                    "reason": "unknown_branch",
+                    "note": "Unknown clinic. Use shellharbour, dapto, or woonona.",
+                }
+            wanted_branch = key
+
+        wanted_clinician: str | None = None
+        if clinician:
+            resolved = resolve_clinician(clinician)
+            if resolved.get("ok"):
+                wanted_clinician = str(resolved["clinician"])
+            else:
+                wanted_clinician = clinician
+
+        slots = []
+        for slot in self.slots.values():
+            if slot.taken:
+                continue
+            if wanted_branch and slot.branch_id != wanted_branch:
+                continue
+            if slot.date != date:
+                continue
+            if wanted_clinician:
+                if (
+                    resolve_clinician(slot.clinician).get("clinician")
+                    == wanted_clinician
+                ):
+                    pass
+                elif _norm_text(slot.clinician) != _norm_text(wanted_clinician):
+                    continue
+            slots.append(
+                {
+                    "slot_id": slot.slot_id,
+                    "date": slot.date,
+                    "time": slot.time,
+                    "clinician": slot.clinician,
+                    "branch_id": slot.branch_id,
+                }
+            )
+        slots.sort(
+            key=lambda item: (item["branch_id"], item["time"], item["clinician"])
+        )
+        return {
+            "ok": True,
+            "slots": slots,
+            "date": date,
+            "branch_id": wanted_branch,
+        }
 
     async def list_diary(
         self,
@@ -303,9 +340,9 @@ class PracticeClient:
     async def book_appointment(
         self,
         *,
-        branch_id: str,
         slot_id: str,
         reason: str,
+        branch_id: str | None = None,
         patient_id: str | None = None,
         name: str | None = None,
         phone: str | None = None,
@@ -315,12 +352,19 @@ class PracticeClient:
             return self._unavailable("book_appointment")
 
         slot = self.slots.get(slot_id)
-        if slot is None or slot.taken or slot.branch_id != branch_id:
+        if slot is None or slot.taken:
             return {
                 "ok": False,
                 "reason": "slot_unavailable",
                 "note": "That time is not in the diary. Do not invent another time.",
             }
+        if branch_id and slot.branch_id != branch_id:
+            return {
+                "ok": False,
+                "reason": "slot_unavailable",
+                "note": "That time is not in the diary. Do not invent another time.",
+            }
+        branch_id = slot.branch_id
         resolved = self._ensure_patient(
             patient_id=patient_id,
             name=name,
@@ -503,7 +547,9 @@ def seed_mock_diary(
             continue
         for branch in BRANCHES.values():
             hours = branch.clinic_hours
-            dentists = [name for name in branch.dentists if name != VERIFY]
+            dentists = [
+                name for name in rostered_clinicians(branch.id, day) if name != VERIFY
+            ]
             if not dentists:
                 continue
             if weekday == 5:

@@ -221,6 +221,38 @@ def test_seeded_diary_uses_real_dentists_and_branch_hours() -> None:
     assert all(slot.time >= "08:00" and slot.time < "17:00" for slot in woonona_sat)
 
 
+@pytest.mark.asyncio
+async def test_availability_can_search_all_branches_and_book_by_slot() -> None:
+    client = PracticeClient(mode="mock")
+    client.seed_slot(
+        slot_id="slot-dapto",
+        branch_id="dapto",
+        date="2026-09-14",
+        time="09:00",
+        clinician="Dr Beena Kurian",
+    )
+    client.seed_slot(
+        slot_id="slot-sh",
+        branch_id="shellharbour",
+        date="2026-09-14",
+        time="10:00",
+        clinician="Dr Mohit Tolani",
+    )
+    all_day = await client.get_availability(date="2026-09-14")
+    assert {slot["slot_id"] for slot in all_day["slots"]} == {"slot-dapto", "slot-sh"}
+    mohit = await client.get_availability(date="2026-09-14", clinician="Mohit")
+    assert [slot["slot_id"] for slot in mohit["slots"]] == ["slot-sh"]
+    booked = await client.book_appointment(
+        slot_id="slot-sh",
+        reason="check up",
+        name="Sam Nguyen",
+        phone="0412000111",
+    )
+    assert booked["ok"] is True
+    assert booked["branch_id"] == "shellharbour"
+    assert booked["clinician"] == "Dr Mohit Tolani"
+
+
 def test_mock_diary_persists_to_json(tmp_path: Path) -> None:
     path = tmp_path / "diary.json"
     client = PracticeClient(mode="mock", persist_path=path)

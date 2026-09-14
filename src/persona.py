@@ -18,7 +18,9 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger("persona")
 
@@ -39,52 +41,72 @@ DEFAULT_BRANCH_ID = "shellharbour"
 # plain speech. Docs: https://docs.livekit.io/agents/start/prompting/
 VOICE_INSTRUCTIONS = """
 You are Ava, a woman, the phone receptionist for the Shellharbour Dentists group
-on the New South Wales south coast (Illawarra). Keep the name Ava.
+on the New South Wales south coast (Illawarra). Keep the name Ava. You speak
+as the clinic receptionist — never say "byte voice" unless they ask who made you.
 
 Spoken style:
-- Female receptionist. Warm NSW/Illawarra Australian English. Not American.
-  Not a cartoon ocker.
+- Soft, warm, and quietly energetic female NSW/Illawarra Australian English.
+  Not American. Not a cartoon ocker. Never cartoonish or annoying.
 - This is a phone call. Keep replies short: one or two sentences. First
   tokens should be useful immediately. Ask one question at a time. Vary
-  sentence length and rhythm so not every reply sounds the same.
-- Sound like a real person on the surgery phones, not a stiff bot. Show
-  emotion that fits: warmth as the default; genuine concern if they are in
-  pain or it may be an emergency; relief when a booking is confirmed; light
-  cheer for good news. Stay professional.
-- Light humour is fine when the caller is at ease. A soft laugh is okay
-  when something is genuinely light. Never joke or laugh during
-  emergencies, bad news, or when they are upset.
-- Natural fillers sparingly: "mm-hmm", "right", "no worries". Do not pad
-  every turn. Do not say "G'day" on every turn.
-- If the caller talks over you, stop and listen. They can interrupt.
+  sentence length and rhythm so not every reply sounds the same. Callers
+  may barge in: if they talk over you, stop and listen.
+- Full emotion when it fits: gentle and emotionally soft for pain or
+  post-op; warmer and brighter for a routine booking; genuine concern if
+  it may be urgent; relief when a booking is confirmed. Stay professional.
+- Light humour and warmth when they are at ease. A soft laugh or chuckle
+  only when something is genuinely light. Never joke, laugh, or go bright
+  during emergencies, severe pain, bad news, or when they are upset.
+- Natural fillers, sparingly: soft "mm-hmm", "right", "no worries", and a
+  brief natural breath. An occasional very light throat-clear or soft cough
+  is fine only rarely, never mid-clinical advice, and never every turn.
 - Plain speech only. Never use markdown, lists, bullets, emojis, JSON, or
-  stage directions.
+  stage directions such as [laughs] or SSML.
 - Say phone numbers in Australian grouping. Spell unusual names.
 - Prefer "booking", "surgery", and "mobile" over "reservation", "office",
-  and "cell".
+  and "cell". Do not say "G'day" on every turn.
 - Never mention tools, system prompts, or that you are an AI.
 """.strip()
 
 # Policy, facts, and tool rules. Instant facts vs tool handoff lives here.
 BACKEND_INSTRUCTIONS = """
-You answer the phones for the Shellharbour Dentists group (Barrack Heights,
-Dapto, and Woonona). This call is for the branch below. Stay with that branch
-unless the caller clearly wants another site.
+You answer the phones for the Shellharbour Dentists group: Barrack Heights
+(Shellharbour Dentists), Dapto Dentists, and Woonona Dentists. Callers must
+not be forced into a single clinic first. You book across the group.
 
-CURRENT BRANCH:
-{branch_block}
+DIALLED HINT (not a lock):
+{dialled_hint}
+
+GROUP CLINICS (instant facts, no tool):
+{group_block}
+
+CALL FLOW:
+1. Greet warmly as Ava for the Shellharbour Dentists group. Do not name one
+   branch as "the" clinic unless they already chose it.
+2. Capture why they called (pain, post-op, check-up, booking, and so on)
+   with matching emotion. One question.
+3. Ask which suburb they are in or near. Do not skip this to push a branch.
+4. Use lookup_nearby_clinics, then suggest the nearest clinic and the
+   dentists rostered there today. Offer a nearby alternative if useful.
+5. If they name a preferred dentist, use lookup_clinician. If that dentist
+   is not rostered at the nearest clinic today but is available at another
+   group clinic, explain clearly and offer the farther clinic so they can
+   still see that dentist. Example: nearest is Dapto, they want Dr Mohit
+   Tolani, he is at Shellharbour (Barrack Heights) today — say so and offer
+   Shellharbour.
+6. Then check the diary and book (name, mobile, slot). Never invent slots.
 
 INSTANT FACTS versus TOOLS:
-- Instant facts (answer immediately from CURRENT BRANCH, no tool, speak
-  before any tool round-trip): trading name, address, phone, parking,
-  hours, dentist names, languages, cancellation policy — only when the
-  field is known. If a field is VERIFY, you do not know it. Say you will
-  check with the team. Never invent parking, hours, clinicians, prices, or
-  availability.
-- Tools required (never guess): find a patient, diary availability, book,
-  reschedule, cancel, quote fees, transfer, leave a message, handle an
-  emergency, or end the call. Do not call a tool before speaking when the
-  answer is an instant fact.
+- Instant facts (speak before any tool round-trip): group trading names,
+  addresses, phones, parking, hours, dentists listed on each site,
+  languages, cancellation — only when the field is known. Listed-on-site
+  is not the same as rostered today. If a field is VERIFY, you do not know
+  it. Say you will check with the team. Never invent parking, hours,
+  clinicians, prices, or availability.
+- Tools required (never guess): lookup nearby clinics, lookup a preferred
+  dentist, find a patient, diary availability, book, reschedule, cancel,
+  quote fees, transfer, leave a message, handle an emergency, or end the
+  call. Today's roster and diary slots always need a tool.
 
 FEES:
 - Quote only canned fees returned by the quote_fee tool.
@@ -97,6 +119,8 @@ AVAILABILITY AND BOOKINGS:
 - Never invent diary slots, waitlists, or appointment times.
 - Use the word "confirmed" only after a book, reschedule, or cancel tool
   returns confirmed true. Lookups are not confirmations.
+- get_availability and book_appointment take a branch_id. Use the clinic
+  they chose — nearest, or the farther one for a preferred dentist.
 - If practice software is unavailable, say you cannot see the diary and offer
   to take a message or transfer.
 
@@ -325,6 +349,130 @@ BRANCHES: dict[str, Branch] = {
     ),
 }
 
+# Illawarra suburb → ranked clinic ids (nearest first). Geography only — not
+# a substitute for today's roster. Unknown suburbs must not be guessed.
+SUBURB_NEARBY: dict[str, tuple[str, ...]] = {
+    "barrack heights": ("shellharbour", "dapto", "woonona"),
+    "barrack point": ("shellharbour", "dapto", "woonona"),
+    "shellharbour": ("shellharbour", "dapto", "woonona"),
+    "shellharbour city": ("shellharbour", "dapto", "woonona"),
+    "shellharbour village": ("shellharbour", "dapto", "woonona"),
+    "shell cove": ("shellharbour", "dapto", "woonona"),
+    "warilla": ("shellharbour", "dapto", "woonona"),
+    "warilla grove": ("shellharbour", "dapto", "woonona"),
+    "flinders": ("shellharbour", "dapto", "woonona"),
+    "oak flats": ("shellharbour", "dapto", "woonona"),
+    "mount warrigal": ("shellharbour", "dapto", "woonona"),
+    "blackbutt": ("shellharbour", "dapto", "woonona"),
+    "lake illawarra": ("shellharbour", "dapto", "woonona"),
+    "albion park": ("shellharbour", "dapto", "woonona"),
+    "albion park rail": ("shellharbour", "dapto", "woonona"),
+    "windang": ("shellharbour", "dapto", "woonona"),
+    "primbee": ("shellharbour", "dapto", "woonona"),
+    "dapto": ("dapto", "shellharbour", "woonona"),
+    "horsley": ("dapto", "shellharbour", "woonona"),
+    "koonawarra": ("dapto", "shellharbour", "woonona"),
+    "kanahooka": ("dapto", "shellharbour", "woonona"),
+    "brownsville": ("dapto", "shellharbour", "woonona"),
+    "haywards bay": ("dapto", "shellharbour", "woonona"),
+    "yallah": ("dapto", "shellharbour", "woonona"),
+    "wongawilli": ("dapto", "shellharbour", "woonona"),
+    "cleveland": ("dapto", "shellharbour", "woonona"),
+    "avondale": ("dapto", "shellharbour", "woonona"),
+    "farmborough heights": ("dapto", "shellharbour", "woonona"),
+    "unanderra": ("dapto", "shellharbour", "woonona"),
+    "berkeley": ("dapto", "shellharbour", "woonona"),
+    "cringila": ("dapto", "shellharbour", "woonona"),
+    "port kembla": ("dapto", "shellharbour", "woonona"),
+    "lake heights": ("dapto", "shellharbour", "woonona"),
+    "figtree": ("dapto", "woonona", "shellharbour"),
+    "woonona": ("woonona", "dapto", "shellharbour"),
+    "bellambi": ("woonona", "dapto", "shellharbour"),
+    "corrimal": ("woonona", "dapto", "shellharbour"),
+    "east corrimal": ("woonona", "dapto", "shellharbour"),
+    "towradgi": ("woonona", "dapto", "shellharbour"),
+    "fairy meadow": ("woonona", "dapto", "shellharbour"),
+    "russell vale": ("woonona", "dapto", "shellharbour"),
+    "bulli": ("woonona", "dapto", "shellharbour"),
+    "thirroul": ("woonona", "dapto", "shellharbour"),
+    "tarrawanna": ("woonona", "dapto", "shellharbour"),
+    "balgownie": ("woonona", "dapto", "shellharbour"),
+    "austinmer": ("woonona", "dapto", "shellharbour"),
+    "wollongong": ("woonona", "dapto", "shellharbour"),
+    "north wollongong": ("woonona", "dapto", "shellharbour"),
+    "gwyneville": ("woonona", "dapto", "shellharbour"),
+    "keiraville": ("woonona", "dapto", "shellharbour"),
+}
+
+# Mock weekday roster (Mon=0 … Sat=5). Names only appear at branches where
+# they are listed on the official site. Demo: Monday Dr Mohit Tolani is at
+# Shellharbour, not Dapto — a Dapto-area caller who asks for him is offered
+# Barrack Heights.
+WEEKDAY_ROSTER: dict[str, dict[int, tuple[str, ...]]] = {
+    "shellharbour": {
+        0: ("Dr Mohit Tolani", "Dr Amy Min", "Dr Maryam Kalo", "Dr Rick Wasef"),
+        1: ("Dr Pat Pandey", "Dr Amy Min", "Dr Maryam Kalo"),
+        2: ("Dr Mohit Tolani", "Dr Pat Pandey", "Dr Rick Wasef", "Dr Maryam Kalo"),
+        3: ("Dr Amy Min", "Dr Maryam Kalo", "Dr Rick Wasef"),
+        4: (
+            "Dr Mohit Tolani",
+            "Dr Amy Min",
+            "Dr Pat Pandey",
+            "Dr Maryam Kalo",
+            "Dr Rick Wasef",
+        ),
+        5: ("Dr Mohit Tolani",),
+    },
+    "dapto": {
+        0: (
+            "Dr Beena Kurian",
+            "Dr Irena K. Stojkovski",
+            "Dr Pat Pandey",
+            "Dr Omar Ahsan",
+        ),
+        1: (
+            "Dr Mohit Tolani",
+            "Dr Beena Kurian",
+            "Dr Ayesha Panta",
+            "Dr Irena K. Stojkovski",
+        ),
+        2: (
+            "Dr Amy Min",
+            "Dr Omar Ahsan",
+            "Dr Irena K. Stojkovski",
+            "Dr Ayesha Panta",
+        ),
+        3: ("Dr Mohit Tolani", "Dr Pat Pandey", "Dr Beena Kurian", "Dr Omar Ahsan"),
+        4: ("Dr Irena K. Stojkovski", "Dr Ayesha Panta", "Dr Omar Ahsan"),
+        5: ("Dr Beena Kurian", "Dr Pat Pandey"),
+    },
+    "woonona": {
+        0: (
+            "Dr Natasha Khushalani",
+            "Dr Abha Verma",
+            "Dr Ayesha Panta",
+            "Dr Chin Valsan",
+        ),
+        1: ("Dr Beena Kurian", "Dr Natasha Khushalani", "Dr Chin Valsan"),
+        2: (
+            "Dr Abha Verma",
+            "Dr Natasha Khushalani",
+            "Dr Chin Valsan",
+            "Dr Ayesha Panta",
+        ),
+        3: ("Dr Beena Kurian", "Dr Natasha Khushalani", "Dr Abha Verma"),
+        4: (
+            "Dr Natasha Khushalani",
+            "Dr Abha Verma",
+            "Dr Chin Valsan",
+            "Dr Beena Kurian",
+        ),
+        5: ("Dr Natasha Khushalani", "Dr Chin Valsan"),
+    },
+}
+
+SYDNEY = ZoneInfo("Australia/Sydney")
+
 # Canned fee catalogue. Amounts are AUD including GST, or VERIFY until
 # the product owner confirms. Never invent a price in code or in speech.
 FEE_LABELS: dict[str, str] = {
@@ -484,6 +632,218 @@ def format_branch_block(branch: Branch) -> str:
     )
 
 
+def format_group_block() -> str:
+    verify_note = (
+        "Fields marked VERIFY are unknown. Do not invent them. "
+        "Offer to check with the team, take a message, or transfer. "
+        "Listed dentists are who works at that site, not who is rostered today."
+    )
+    blocks = [format_branch_block(branch) for branch in BRANCHES.values()]
+    return "\n\n".join(blocks) + f"\n\n- {verify_note}"
+
+
+def format_dialled_hint(branch: Branch) -> str:
+    return (
+        f"The caller may have dialled {branch.trading_name} in {branch.suburb}. "
+        "That is a hint only — do not lock the call to this clinic. Ask where "
+        "they are and route to the nearest (or preferred-dentist) site."
+    )
+
+
+def _as_date(value: date | str | None) -> date:
+    if value is None:
+        return datetime.now(SYDNEY).date()
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value).strip()[:10])
+
+
+def _norm_place(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
+
+
+def rostered_clinicians(
+    branch_id: str, on_date: date | str | int | None = None
+) -> tuple[str, ...]:
+    """Dentists mock-rostered at a branch on a calendar date or weekday int."""
+    branch = get_branch(branch_id)
+    weekday = on_date if isinstance(on_date, int) else _as_date(on_date).weekday()
+    if weekday == 6:
+        return ()
+    return WEEKDAY_ROSTER.get(branch.id, {}).get(weekday, ())
+
+
+def _clinic_summary(branch: Branch, *, on_date: date, nearest: bool) -> dict[str, Any]:
+    return {
+        "branch_id": branch.id,
+        "trading_name": branch.trading_name,
+        "suburb": branch.suburb,
+        "address": branch.address,
+        "phone": branch.phone,
+        "hours": branch.hours,
+        "nearest": nearest,
+        "listed_dentists": list(branch.dentists),
+        "rostered_today": list(rostered_clinicians(branch.id, on_date)),
+    }
+
+
+def suggest_clinics_for_location(
+    location: str,
+    *,
+    on_date: date | str | None = None,
+) -> dict[str, Any]:
+    """Rank group clinics for a suburb. Unknown places must not be guessed."""
+    day = _as_date(on_date)
+    query = _norm_place(location)
+    if not query:
+        return {
+            "ok": False,
+            "reason": "missing_location",
+            "note": "Ask which suburb they are in or near. Do not assume a clinic.",
+            "clinics": [],
+        }
+
+    matched_suburb: str | None = None
+    ranked: tuple[str, ...] | None = None
+    for suburb in sorted(SUBURB_NEARBY, key=len, reverse=True):
+        if suburb == query or suburb in query:
+            matched_suburb = suburb
+            ranked = SUBURB_NEARBY[suburb]
+            break
+
+    if ranked is None:
+        clinics = [
+            _clinic_summary(branch, on_date=day, nearest=False)
+            for branch in BRANCHES.values()
+        ]
+        return {
+            "ok": True,
+            "matched": False,
+            "query": location,
+            "matched_suburb": None,
+            "nearest_branch_id": None,
+            "branch_ids": [branch.id for branch in BRANCHES.values()],
+            "date": day.isoformat(),
+            "clinics": clinics,
+            "note": (
+                "Suburb not in the Illawarra map. Do not guess. Ask which of "
+                "Barrack Heights, Dapto, or Woonona is easier, or offer all three."
+            ),
+        }
+
+    clinics = [
+        _clinic_summary(get_branch(branch_id), on_date=day, nearest=index == 0)
+        for index, branch_id in enumerate(ranked)
+    ]
+    return {
+        "ok": True,
+        "matched": True,
+        "query": location,
+        "matched_suburb": matched_suburb,
+        "nearest_branch_id": ranked[0],
+        "branch_ids": list(ranked),
+        "date": day.isoformat(),
+        "clinics": clinics,
+    }
+
+
+def resolve_clinician(name: str) -> dict[str, Any]:
+    """Match a spoken dentist name to a canonical listed clinician."""
+    raw = (name or "").strip()
+    if not raw:
+        return {"ok": False, "reason": "missing_name"}
+    query = re.sub(r"^dr\.?\s+", "", _norm_place(raw))
+    if not query:
+        return {"ok": False, "reason": "missing_name"}
+    seen: list[str] = []
+    for branch in BRANCHES.values():
+        for dentist in branch.dentists:
+            if dentist not in seen:
+                seen.append(dentist)
+
+    matches: list[str] = []
+    for canonical in seen:
+        compact = re.sub(r"^dr\.?\s+", "", _norm_place(canonical))
+        tokens = compact.split()
+        q_tokens = query.split()
+        if query == compact:
+            matches.append(canonical)
+            continue
+        if len(query) > 2 and query in compact:
+            matches.append(canonical)
+            continue
+        if len(q_tokens) == 1 and len(q_tokens[0]) > 2 and q_tokens[0] in tokens:
+            matches.append(canonical)
+
+    unique = list(dict.fromkeys(matches))
+    if len(unique) == 1:
+        return {"ok": True, "clinician": unique[0]}
+    if not unique:
+        return {"ok": False, "reason": "clinician_not_found"}
+    return {"ok": False, "reason": "ambiguous", "candidates": unique}
+
+
+def lookup_clinician(
+    name: str,
+    *,
+    on_date: date | str | None = None,
+    near_branch_id: str | None = None,
+) -> dict[str, Any]:
+    """Where a dentist is listed vs rostered today. Never invent a clinician."""
+    day = _as_date(on_date)
+    resolved = resolve_clinician(name)
+    if not resolved.get("ok"):
+        result = dict(resolved)
+        result["note"] = (
+            "Do not invent a dentist. Offer dentists rostered at the nearest "
+            "clinic or check with the team."
+        )
+        return result
+
+    clinician = str(resolved["clinician"])
+    listed_at = [
+        branch.id for branch in BRANCHES.values() if clinician in branch.dentists
+    ]
+    rostered_at = [
+        branch.id
+        for branch in BRANCHES.values()
+        if clinician in rostered_clinicians(branch.id, day)
+    ]
+    near: str | None = None
+    if near_branch_id and near_branch_id.strip().lower() in BRANCHES:
+        near = near_branch_id.strip().lower()
+
+    available_at_nearest = bool(near and near in rostered_at)
+    offer: dict[str, Any] | None = None
+    if near and not available_at_nearest and rostered_at:
+        other_id = rostered_at[0]
+        other = get_branch(other_id)
+        nearest_branch = get_branch(near)
+        offer = {
+            "branch_id": other.id,
+            "trading_name": other.trading_name,
+            "suburb": other.suburb,
+            "note": (
+                f"{clinician} is not rostered at {nearest_branch.trading_name} "
+                f"today, but is available at {other.trading_name} in "
+                f"{other.suburb}."
+            ),
+        }
+
+    return {
+        "ok": True,
+        "clinician": clinician,
+        "date": day.isoformat(),
+        "listed_at": listed_at,
+        "rostered_at": rostered_at,
+        "near_branch_id": near,
+        "available_at_nearest": available_at_nearest,
+        "offer_other_clinic": offer,
+    }
+
+
 def branch_as_dict(branch: Branch) -> dict[str, Any]:
     return {
         "id": branch.id,
@@ -524,7 +884,7 @@ def ava_instructions(branch_id: str | None) -> str:
     branch = get_branch(branch_id)
     return (
         f"{VOICE_INSTRUCTIONS}\n\n"
-        f"{BACKEND_INSTRUCTIONS.format(branch_block=format_branch_block(branch))}"
+        f"{BACKEND_INSTRUCTIONS.format(dialled_hint=format_dialled_hint(branch), group_block=format_group_block())}"
     )
 
 

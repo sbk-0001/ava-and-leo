@@ -143,13 +143,25 @@ def test_voice_instructions_include_human_affect() -> None:
     assert "ai" in spoken
     assert "one question" in spoken
     assert "one or two sentences" in spoken or "one to two" in spoken
+    assert "soft" in spoken
+    assert "energetic" in spoken
+    assert "post-op" in spoken or "post op" in spoken
+    assert "barge" in spoken or "talk over" in spoken
+    assert "cartoon" in spoken
+    assert "byte voice" in spoken
+    assert "throat" in spoken or "cough" in spoken
 
 
 def test_backend_instructions_policy_intact() -> None:
     """Clinic policy lives in BACKEND_INSTRUCTIONS and must not be rewritten away."""
     text = BACKEND_INSTRUCTIONS
     lowered = text.lower()
-    assert "CURRENT BRANCH:" in text
+    assert "GROUP CLINICS" in text
+    assert "CALL FLOW:" in text
+    assert "not be forced" in lowered or "not be forced into a single" in lowered
+    assert "lookup_nearby_clinics" in text
+    assert "lookup_clinician" in text
+    assert "preferred dentist" in lowered
     assert "INSTANT FACTS versus TOOLS:" in text
     assert "parking" in lowered
     assert "hours" in lowered
@@ -162,6 +174,8 @@ def test_backend_instructions_policy_intact() -> None:
     assert "Quote only canned fees" in text
     assert "no tool" in lowered
     assert "speak before" in lowered or "immediately" in lowered
+    assert "byte voice" in VOICE_INSTRUCTIONS.lower()
+    assert "CURRENT BRANCH:" not in text
 
 
 def test_ava_instructions_are_female_au_voice_with_tool_rules() -> None:
@@ -181,6 +195,10 @@ def test_ava_instructions_are_female_au_voice_with_tool_rules() -> None:
     assert "Captain Cook Drive" in text
     assert VOICE_INSTRUCTIONS in text
     assert "Never invent diary slots" in text
+    assert "Dapto Dentists" in text
+    assert "Woonona Dentists" in text
+    assert "lookup_nearby_clinics" in text
+    assert "not be forced" in lowered or "do not lock" in lowered
 
 
 def test_resolve_persona_explicit_env() -> None:

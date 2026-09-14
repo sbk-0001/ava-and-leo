@@ -36,9 +36,7 @@ async function api(path, options = {}) {
 }
 
 function todayISO() {
-  const now = new Date();
-  const tz = now.getTimezoneOffset() * 60000;
-  return new Date(now.getTime() - tz).toISOString().slice(0, 10);
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Australia/Sydney" });
 }
 
 function renderTabs() {

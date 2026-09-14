@@ -179,6 +179,7 @@ def test_portal_js_plays_remote_audio_and_keeps_call_ava() -> None:
     assert "remoteParticipants" in js
     assert "startAudio" in js
     assert "TrackSubscribed" in js
+    assert "Australia/Sydney" in js
 
 
 def test_portal_http_serves_byte_voice_static() -> None:

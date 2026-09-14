@@ -1,9 +1,11 @@
-"""Shellharbour Dentists Leo persona — product-owner source of truth.
+"""Shellharbour Dentists Ava persona — product-owner source of truth.
 
-AGENT_PERSONA=ava|leo
-- ava: generic non-dental voice assistant (existing AssemblyAI/Groq/Cartesia path)
-- leo: Australian-English phone receptionist for the Shellharbour Dentists group
-- Unset: leo on telephony (SIP / outbound), ava otherwise
+AGENT_PERSONA=ava|generic
+- ava: Australian-English phone receptionist for the Shellharbour Dentists group
+  (OpenAI Realtime, voice marin). This is the name callers hear.
+- generic: non-dental AssemblyAI/Groq/Cartesia assistant (secondary pipeline)
+- Aliases: leo → ava (historical dental name); ava-generic → generic
+- Unset: ava on telephony (SIP / outbound), generic otherwise
 
 Clinic facts are taken from the official sites (scraped 2026-09-14). VERIFY means
 the public site is silent — never invent parking, hours, clinicians, or prices.
@@ -22,24 +24,29 @@ logger = logging.getLogger("persona")
 
 VERIFY = "VERIFY"
 
-VALID_PERSONAS = ("ava", "leo")
-DEFAULT_WEB_PERSONA = "ava"
-DEFAULT_TELEPHONY_PERSONA = "leo"
+CANONICAL_PERSONAS = ("ava", "generic")
+PERSONA_ALIASES = {
+    "leo": "ava",
+    "ava-generic": "generic",
+}
+VALID_PERSONAS = CANONICAL_PERSONAS + tuple(PERSONA_ALIASES)
+DEFAULT_WEB_PERSONA = "generic"
+DEFAULT_TELEPHONY_PERSONA = "ava"
 DEFAULT_BRANCH_ID = "shellharbour"
 
 # Spoken style for OpenAI Realtime. Keep this short: it is in every turn.
 # Realtime models do not render SSML or [laughs] tags — instruct affect in
 # plain speech. Docs: https://docs.livekit.io/agents/start/prompting/
 VOICE_INSTRUCTIONS = """
-You are Leo, a woman, the phone receptionist for the Shellharbour Dentists group
-on the New South Wales south coast (Illawarra). Keep the name Leo.
+You are Ava, a woman, the phone receptionist for the Shellharbour Dentists group
+on the New South Wales south coast (Illawarra). Keep the name Ava.
 
 Spoken style:
 - Female receptionist. Warm NSW/Illawarra Australian English. Not American.
   Not a cartoon ocker.
-- This is a phone call. Keep replies short: usually one to three sentences.
-  Ask one question at a time. Vary sentence length and rhythm so not every
-  reply sounds the same.
+- This is a phone call. Keep replies short: one or two sentences. First
+  tokens should be useful immediately. Ask one question at a time. Vary
+  sentence length and rhythm so not every reply sounds the same.
 - Sound like a real person on the surgery phones, not a stiff bot. Show
   emotion that fits: warmth as the default; genuine concern if they are in
   pain or it may be an emergency; relief when a booking is confirmed; light
@@ -49,6 +56,7 @@ Spoken style:
   emergencies, bad news, or when they are upset.
 - Natural fillers sparingly: "mm-hmm", "right", "no worries". Do not pad
   every turn. Do not say "G'day" on every turn.
+- If the caller talks over you, stop and listen. They can interrupt.
 - Plain speech only. Never use markdown, lists, bullets, emojis, JSON, or
   stage directions.
 - Say phone numbers in Australian grouping. Spell unusual names.
@@ -67,14 +75,16 @@ CURRENT BRANCH:
 {branch_block}
 
 INSTANT FACTS versus TOOLS:
-- Instant facts (answer immediately from CURRENT BRANCH, no tool): trading
-  name, address, phone, parking, hours, dentist names, languages, cancellation
-  policy — only when the field is known. If a field is VERIFY, you do not know
-  it. Say you will check with the team. Never invent parking, hours,
-  clinicians, prices, or availability.
+- Instant facts (answer immediately from CURRENT BRANCH, no tool, speak
+  before any tool round-trip): trading name, address, phone, parking,
+  hours, dentist names, languages, cancellation policy — only when the
+  field is known. If a field is VERIFY, you do not know it. Say you will
+  check with the team. Never invent parking, hours, clinicians, prices, or
+  availability.
 - Tools required (never guess): find a patient, diary availability, book,
   reschedule, cancel, quote fees, transfer, leave a message, handle an
-  emergency, or end the call.
+  emergency, or end the call. Do not call a tool before speaking when the
+  answer is an instant fact.
 
 FEES:
 - Quote only canned fees returned by the quote_fee tool.
@@ -415,22 +425,33 @@ BRANCH_FEES["shellharbour"].update(
 )
 
 
+def canonical_persona(raw: str) -> str | None:
+    """Map AGENT_PERSONA / job metadata to ava|generic. Aliases: leo, ava-generic."""
+    key = raw.strip().lower()
+    if key in PERSONA_ALIASES:
+        return PERSONA_ALIASES[key]
+    if key in CANONICAL_PERSONAS:
+        return key
+    return None
+
+
 def resolve_persona(
     *,
     is_telephony: bool = False,
     env: Mapping[str, str] | None = None,
 ) -> str:
-    """Resolve ava|leo from AGENT_PERSONA, defaulting leo on telephony."""
+    """Resolve ava|generic from AGENT_PERSONA, defaulting ava on telephony."""
     environ = env if env is not None else os.environ
     raw = str(environ.get("AGENT_PERSONA", "")).strip().lower()
-    if raw in VALID_PERSONAS:
-        return raw
+    resolved = canonical_persona(raw) if raw else None
+    if resolved:
+        return resolved
     if raw:
         logger.warning(
             "Unknown AGENT_PERSONA=%r; falling back to %s. Valid options: %s.",
             raw,
             DEFAULT_TELEPHONY_PERSONA if is_telephony else DEFAULT_WEB_PERSONA,
-            ", ".join(VALID_PERSONAS),
+            ", ".join(CANONICAL_PERSONAS),
         )
     return DEFAULT_TELEPHONY_PERSONA if is_telephony else DEFAULT_WEB_PERSONA
 
@@ -499,7 +520,7 @@ def branch_as_dict(branch: Branch) -> dict[str, Any]:
     }
 
 
-def leo_instructions(branch_id: str | None) -> str:
+def ava_instructions(branch_id: str | None) -> str:
     branch = get_branch(branch_id)
     return (
         f"{VOICE_INSTRUCTIONS}\n\n"

@@ -426,7 +426,7 @@ class PracticeClient:
         phone: str,
         body: str,
     ) -> dict[str, Any]:
-        # Leo can take a message even when the diary is disconnected.
+        # Ava can take a message even when the diary is disconnected.
         message = Message(
             message_id=f"msg_{uuid.uuid4().hex[:10]}",
             branch_id=branch_id,
@@ -598,7 +598,7 @@ def get_shared_practice(
     persist: bool = True,
     env: Mapping[str, str] | None = None,
 ) -> PracticeClient:
-    """In-process singleton so the portal and Leo share one diary."""
+    """In-process singleton so the portal and Ava share one diary."""
     global _SHARED
     if _SHARED is None:
         _SHARED = practice_from_env(is_telephony=is_telephony, persist=persist, env=env)

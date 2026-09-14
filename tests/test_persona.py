@@ -1,4 +1,4 @@
-"""Unit tests for Leo persona, branch facts, and AGENT_PERSONA switching."""
+"""Unit tests for Ava persona, branch facts, and AGENT_PERSONA switching."""
 
 from persona import (
     BACKEND_INSTRUCTIONS,
@@ -7,9 +7,9 @@ from persona import (
     DEFAULT_WEB_PERSONA,
     VERIFY,
     VOICE_INSTRUCTIONS,
+    ava_instructions,
     format_branch_block,
     get_branch,
-    leo_instructions,
     resolve_persona,
 )
 
@@ -113,8 +113,17 @@ def test_branch_block_includes_instant_facts() -> None:
     assert "do not invent" in block.lower() or "VERIFY" in block
 
 
+def test_voice_instructions_name_ava_not_leo() -> None:
+    """Caller-facing identity is Ava. Leo must not remain in spoken copy."""
+    spoken = VOICE_INSTRUCTIONS
+    lowered = spoken.lower()
+    assert "ava" in lowered
+    assert "leo" not in lowered
+    assert "keep the name ava" in lowered
+
+
 def test_voice_instructions_include_human_affect() -> None:
-    """Spoken style must keep Leo warm and human, not a stiff script.
+    """Spoken style must stay warm and human, not a stiff script.
 
     Snapshot-style keyword checks so humour, emotion, and laughter do not
     silently drop out of VOICE_INSTRUCTIONS.
@@ -133,6 +142,7 @@ def test_voice_instructions_include_human_affect() -> None:
     assert "g'day" in spoken
     assert "ai" in spoken
     assert "one question" in spoken
+    assert "one or two sentences" in spoken or "one to two" in spoken
 
 
 def test_backend_instructions_policy_intact() -> None:
@@ -150,17 +160,20 @@ def test_backend_instructions_policy_intact() -> None:
     assert "triple zero, 000" in text
     assert "Do not fill VERIFY gaps." in text
     assert "Quote only canned fees" in text
+    assert "no tool" in lowered
+    assert "speak before" in lowered or "immediately" in lowered
 
 
-def test_leo_instructions_are_female_au_voice_with_tool_rules() -> None:
-    text = leo_instructions("shellharbour")
+def test_ava_instructions_are_female_au_voice_with_tool_rules() -> None:
+    text = ava_instructions("shellharbour")
     lowered = text.lower()
     spoken = VOICE_INSTRUCTIONS.lower()
     assert "australian" in spoken
     assert "woman" in spoken or "female" in spoken
     assert "nsw" in spoken or "illawarra" in spoken
     assert "american" in spoken
-    assert "leo" in lowered
+    assert "ava" in lowered
+    assert "leo" not in lowered
     assert "confirmed" in lowered
     assert "000" in text
     assert "Shellharbour Dentists" in text
@@ -172,14 +185,31 @@ def test_leo_instructions_are_female_au_voice_with_tool_rules() -> None:
 
 def test_resolve_persona_explicit_env() -> None:
     assert resolve_persona(is_telephony=True, env={"AGENT_PERSONA": "ava"}) == "ava"
-    assert resolve_persona(is_telephony=False, env={"AGENT_PERSONA": "leo"}) == "leo"
-    assert resolve_persona(is_telephony=False, env={"AGENT_PERSONA": "LEO"}) == "leo"
+    assert (
+        resolve_persona(is_telephony=False, env={"AGENT_PERSONA": "generic"})
+        == "generic"
+    )
+    assert resolve_persona(is_telephony=False, env={"AGENT_PERSONA": "AVA"}) == "ava"
+
+
+def test_resolve_persona_aliases() -> None:
+    """Historical names still resolve: leo → ava (dental), ava-generic → generic."""
+    assert resolve_persona(is_telephony=True, env={"AGENT_PERSONA": "leo"}) == "ava"
+    assert resolve_persona(is_telephony=False, env={"AGENT_PERSONA": "LEO"}) == "ava"
+    assert (
+        resolve_persona(is_telephony=False, env={"AGENT_PERSONA": "ava-generic"})
+        == "generic"
+    )
 
 
 def test_resolve_persona_defaults() -> None:
     assert (
-        resolve_persona(is_telephony=True, env={}) == DEFAULT_TELEPHONY_PERSONA == "leo"
+        resolve_persona(is_telephony=True, env={}) == DEFAULT_TELEPHONY_PERSONA == "ava"
     )
-    assert resolve_persona(is_telephony=False, env={}) == DEFAULT_WEB_PERSONA == "ava"
-    assert resolve_persona(is_telephony=True, env={"AGENT_PERSONA": "nope"}) == "leo"
-    assert resolve_persona(is_telephony=False, env={"AGENT_PERSONA": "nope"}) == "ava"
+    assert (
+        resolve_persona(is_telephony=False, env={}) == DEFAULT_WEB_PERSONA == "generic"
+    )
+    assert resolve_persona(is_telephony=True, env={"AGENT_PERSONA": "nope"}) == "ava"
+    assert (
+        resolve_persona(is_telephony=False, env={"AGENT_PERSONA": "nope"}) == "generic"
+    )

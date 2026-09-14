@@ -1,4 +1,4 @@
-"""Leo — Shellharbour Dentists OpenAI Realtime receptionist."""
+"""Ava — Shellharbour Dentists OpenAI Realtime receptionist."""
 
 from __future__ import annotations
 
@@ -12,37 +12,53 @@ from livekit import api
 from livekit.agents import Agent, RunContext, function_tool, get_job_context
 from livekit.agents.beta.tools import EndCallTool
 from livekit.plugins import openai
+from openai.types.beta.realtime.session import TurnDetection
 
-from persona import get_branch, leo_instructions, quote_fee
+from persona import ava_instructions, get_branch, quote_fee
 from practice import PracticeClient
 from sip_utils import find_sip_participant
 
-logger = logging.getLogger("leo")
+logger = logging.getLogger("ava")
 
-LEO_REALTIME_MODEL = "gpt-realtime"
+AVA_REALTIME_MODEL = "gpt-realtime"
 # OpenAI Realtime has no AU-specific voice. marin is the recommended feminine
 # quality voice; cedar is more masculine.
 # Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/
-LEO_DEFAULT_VOICE = "marin"
+AVA_DEFAULT_VOICE = "marin"
 
 
-def resolve_leo_voice(env: Mapping[str, str] | None = None) -> str:
+def resolve_ava_voice(env: Mapping[str, str] | None = None) -> str:
+    """Realtime voice. AVA_REALTIME_VOICE wins; LEO_REALTIME_VOICE is a legacy alias."""
     environ = env if env is not None else os.environ
-    voice = str(environ.get("LEO_REALTIME_VOICE", LEO_DEFAULT_VOICE)).strip()
-    return voice or LEO_DEFAULT_VOICE
+    voice = str(
+        environ.get("AVA_REALTIME_VOICE") or environ.get("LEO_REALTIME_VOICE") or ""
+    ).strip()
+    return voice or AVA_DEFAULT_VOICE
 
 
-def leo_realtime_model() -> openai.realtime.RealtimeModel:
-    """OpenAI Realtime speech-to-speech model for Leo telephony.
+def ava_realtime_model() -> openai.realtime.RealtimeModel:
+    """OpenAI Realtime speech-to-speech model for Ava telephony.
 
-    Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/
+    Low-latency path: server VAD with a tighter silence window (telephony-friendly)
+    and interrupt_response so the caller can barge in. Do not claim zero latency.
+    Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/#turn-detection
+          https://docs.livekit.io/agents/logic/turns/#interruption-in-realtime-mode
     """
     return openai.realtime.RealtimeModel(
-        model=LEO_REALTIME_MODEL, voice=resolve_leo_voice()
+        model=AVA_REALTIME_MODEL,
+        voice=resolve_ava_voice(),
+        turn_detection=TurnDetection(
+            type="server_vad",
+            threshold=0.7,
+            prefix_padding_ms=300,
+            silence_duration_ms=400,
+            create_response=True,
+            interrupt_response=True,
+        ),
     )
 
 
-class LeoReceptionist(Agent):
+class AvaReceptionist(Agent):
     """Australian-English phone receptionist for Shellharbour Dentists."""
 
     def __init__(
@@ -73,8 +89,8 @@ class LeoReceptionist(Agent):
             end_call_kwargs["ignore_on_enter"] = True
         end_call = EndCallTool(**end_call_kwargs)
         super().__init__(
-            instructions=leo_instructions(self.branch.id),
-            llm=leo_realtime_model(),
+            instructions=ava_instructions(self.branch.id),
+            llm=ava_realtime_model(),
             tools=end_call.tools,
         )
 
@@ -302,7 +318,7 @@ def inbound_greeting_instructions(branch_id: str) -> str:
     branch = get_branch(branch_id)
     return (
         "Sound warm and human, like a real receptionist picking up — not a script. "
-        f"Greet the caller as Leo at {branch.trading_name} in {branch.suburb}. "
-        "One short sentence plus one question. Offer to help with a booking or a "
-        "question. Do not say G'day."
+        f"Greet the caller as Ava at {branch.trading_name} in {branch.suburb}. "
+        "One warm short sentence plus one question. Offer to help with a booking "
+        "or a question. Do not say G'day."
     )

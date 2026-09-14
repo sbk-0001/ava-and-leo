@@ -1,11 +1,14 @@
-"""Clinic portal API uses the same mock PracticeClient as Leo."""
+"""Clinic portal API uses the same mock PracticeClient as Ava."""
 
 from datetime import date
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from portal import create_app
 from practice import PracticeClient, seed_mock_diary
+
+STATIC = Path(__file__).resolve().parents[1] / "src" / "portal_static"
 
 
 def _client() -> tuple[TestClient, PracticeClient]:
@@ -73,3 +76,31 @@ def test_portal_token_without_livekit_keys_is_explicit(monkeypatch) -> None:
     response = http.post("/api/token", json={"branch_id": "shellharbour"})
     assert response.status_code == 503
     assert "LIVEKIT" in response.json()["detail"]
+    assert "Ava" in response.json()["detail"]
+
+
+def test_portal_config_persona_is_ava() -> None:
+    http, _practice = _client()
+    body = http.get("/api/config").json()
+    assert body["persona"] == "ava"
+    assert body["voice"] == "marin"
+
+
+def test_portal_health_is_ava_desk() -> None:
+    http, _practice = _client()
+    body = http.get("/api/health").json()
+    assert body["ok"] == "true"
+    assert "ava" in body["service"]
+    assert "leo" not in body["service"]
+
+
+def test_portal_ui_says_call_ava() -> None:
+    html = (STATIC / "index.html").read_text()
+    js = (STATIC / "app.js").read_text()
+    assert "Call Ava" in html
+    assert "Call Leo" not in html
+    assert "Ava desk" in html
+    assert "Leo desk" not in html
+    assert "Connecting to Ava" in js
+    assert "Connected to Ava" in js
+    assert "Leo" not in js

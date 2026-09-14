@@ -214,9 +214,9 @@ function setCallStatus(message, visible = true) {
   el.classList.toggle("hidden", !visible);
 }
 
-async function callLeo() {
-  setCallStatus("Connecting to Leo…");
-  $("call-leo").classList.add("live");
+async function callAva() {
+  setCallStatus("Connecting to Ava…");
+  $("call-ava").classList.add("live");
   try {
     const token = await api("/api/token", {
       method: "POST",
@@ -236,9 +236,9 @@ async function callLeo() {
     await room.localParticipant.setMicrophoneEnabled(true);
     state.room = room;
     $("hang-up").classList.remove("hidden");
-    setCallStatus(`Connected to Leo at ${currentBranch().trading_name}. Speak normally.`);
+    setCallStatus(`Connected to Ava at ${currentBranch().trading_name}. Speak normally.`);
   } catch (error) {
-    $("call-leo").classList.remove("live");
+    $("call-ava").classList.remove("live");
     setCallStatus(error.message || "Could not connect. Is the agent worker running?");
   }
 }
@@ -248,13 +248,13 @@ async function hangUp(disconnect = true) {
     await state.room.disconnect();
   }
   state.room = null;
-  $("call-leo").classList.remove("live");
+  $("call-ava").classList.remove("live");
   $("hang-up").classList.add("hidden");
   $("remote-audio").innerHTML = "";
   setCallStatus("Call ended.", true);
 }
 
-$("call-leo").addEventListener("click", callLeo);
+$("call-ava").addEventListener("click", callAva);
 $("hang-up").addEventListener("click", () => hangUp(true));
 $("diary-date").addEventListener("change", loadDiary);
 

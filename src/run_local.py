@@ -1,4 +1,4 @@
-"""Run mock diary + Leo worker + clinic portal together for local demo.
+"""Run mock diary + Ava worker + clinic portal together for local demo.
 
 Usage:
     uv run python src/run_local.py
@@ -15,9 +15,9 @@ from dotenv import load_dotenv
 
 load_dotenv(".env.local")
 
-os.environ.setdefault("AGENT_PERSONA", "leo")
+os.environ.setdefault("AGENT_PERSONA", "ava")
 os.environ.setdefault("PRACTICE_SOFTWARE", "mock")
-os.environ.setdefault("LEO_REALTIME_VOICE", "marin")
+os.environ.setdefault("AVA_REALTIME_VOICE", "marin")
 
 
 def _portal_bind() -> tuple[str, int]:
@@ -43,7 +43,7 @@ def _start_portal() -> str:
             access_log=False,
         )
     )
-    thread = threading.Thread(target=server.run, name="leo-portal", daemon=True)
+    thread = threading.Thread(target=server.run, name="ava-portal", daemon=True)
     thread.start()
     return f"http://{host}:{port}"
 
@@ -52,13 +52,13 @@ def main() -> None:
     url = _start_portal()
     password = os.getenv("PORTAL_PASSWORD", "").strip()
     print()
-    print(f"Leo clinic portal: {url}")
-    print("  Pick a branch, book in the mock diary, then Call Leo.")
+    print(f"Ava clinic portal: {url}")
+    print("  Pick a branch, book in the mock diary, then Call Ava.")
     if password:
         print("  Auth: PORTAL_PASSWORD is set (shared gate).")
     else:
         print("  Auth: open on localhost. Set PORTAL_PASSWORD before exposing it.")
-    print("  Agent worker starting in this process (AGENT_PERSONA=leo, mock diary).")
+    print("  Agent worker starting in this process (AGENT_PERSONA=ava, mock diary).")
     print()
 
     from livekit.agents import cli

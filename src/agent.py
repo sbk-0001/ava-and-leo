@@ -22,8 +22,8 @@ from livekit.agents import (
 from livekit.agents.llm import ChatMessage
 from livekit.plugins import ai_coustics, assemblyai, cartesia, groq
 
-from leo import LeoReceptionist, inbound_greeting_instructions
-from persona import VALID_PERSONAS, resolve_persona
+from ava_receptionist import AvaReceptionist, inbound_greeting_instructions
+from persona import CANONICAL_PERSONAS, canonical_persona, resolve_persona
 from practice import get_shared_practice
 from sip_utils import (
     SIP_CALL_ERRORS,
@@ -44,20 +44,19 @@ GROQ_LLM_MODEL = "llama-3.3-70b-versatile"  # current Groq production model
 CARTESIA_TTS_MODEL = "sonic-3"
 
 # Cartesia Sonic-3 voice IDs (swap for exact production voices later).
-AVA_VOICE_ID = "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"  # Jacqueline — American female
-LEO_VOICE_ID = (
-    "a167e0f3-df7e-4d52-a9c3-f949145efdab"  # Blake — American male (Ava-path unused)
+GENERIC_VOICE_ID = (
+    "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"  # Jacqueline — American female
 )
 
-# Each persona picks BOTH a TTS voice and the agent_name written to Supabase.
-# Leo telephony uses OpenAI Realtime instead of this Cartesia voice.
+# Each persona picks BOTH a TTS voice (generic pipeline) and the agent_name
+# written to Supabase. Ava telephony uses OpenAI Realtime instead of Cartesia.
 PERSONAS = {
-    "ava": {"agent_name": "ava", "voice_id": AVA_VOICE_ID},
-    "leo": {"agent_name": "leo", "voice_id": LEO_VOICE_ID},
+    "ava": {"agent_name": "ava", "voice_id": GENERIC_VOICE_ID},
+    "generic": {"agent_name": "generic", "voice_id": GENERIC_VOICE_ID},
 }
 
-AVA_ENV_VARS = ("ASSEMBLYAI_API_KEY", "GROQ_API_KEY", "CARTESIA_API_KEY")
-LEO_ENV_VARS = ("OPENAI_API_KEY",)
+GENERIC_ENV_VARS = ("ASSEMBLYAI_API_KEY", "GROQ_API_KEY", "CARTESIA_API_KEY")
+AVA_ENV_VARS = ("OPENAI_API_KEY",)
 
 
 def _require_env(names: tuple[str, ...]) -> None:
@@ -201,7 +200,7 @@ def _save_call_to_supabase(
 
         # Build readable turns from the conversation history. Each "message"
         # item carries a role (user/assistant/system) and its text content.
-        speaker_label = agent_name.capitalize()  # "Ava" or "Leo"
+        speaker_label = "Ava" if agent_name == "ava" else agent_name.capitalize()
         turns: list[tuple[str, str]] = []
         for item in session.history.items:
             if getattr(item, "type", None) != "message":
@@ -302,7 +301,7 @@ async def _place_outbound_call(ctx: JobContext, phone_number: str) -> bool:
         return False
 
 
-def _build_ava_session(voice_id: str) -> AgentSession:
+def _build_generic_session(voice_id: str) -> AgentSession:
     return AgentSession(
         stt=assemblyai.STT(model=ASSEMBLYAI_STT_MODEL),
         tts=cartesia.TTS(model=CARTESIA_TTS_MODEL, voice=voice_id),
@@ -312,6 +311,23 @@ def _build_ava_session(voice_id: str) -> AgentSession:
             preemptive_generation=PreemptiveGenerationOptions(
                 enabled=True, preemptive_tts=True
             ),
+        ),
+    )
+
+
+def _build_ava_session() -> AgentSession:
+    """Realtime speech-to-speech session. Barge-in stays on.
+
+    Turn closing and interruptions are owned by OpenAI Realtime server VAD
+    (interrupt_response=True on the model). InterruptionOptions besides
+    enabled are ignored in realtime mode.
+    Docs: https://docs.livekit.io/agents/logic/turns/#interruption-in-realtime-mode
+          https://docs.livekit.io/reference/agents/turn-handling-options/
+    """
+    return AgentSession(
+        turn_handling=TurnHandlingOptions(
+            turn_detection="realtime_llm",
+            interruption={"enabled": True},
         ),
     )
 
@@ -358,11 +374,16 @@ async def my_agent(ctx: JobContext):
 
     is_telephony = is_sip_participant(participant) or bool(phone_number)
     metadata_persona = metadata.get("persona")
-    if (
-        isinstance(metadata_persona, str)
-        and metadata_persona.strip().lower() in VALID_PERSONAS
-    ):
-        persona_key = metadata_persona.strip().lower()
+    if isinstance(metadata_persona, str) and metadata_persona.strip():
+        resolved = canonical_persona(metadata_persona)
+        persona_key = resolved or resolve_persona(is_telephony=is_telephony)
+        if resolved is None:
+            logger.warning(
+                "Unknown job metadata persona=%r; falling back to %s. Valid: %s.",
+                metadata_persona,
+                persona_key,
+                ", ".join(CANONICAL_PERSONAS),
+            )
     else:
         persona_key = resolve_persona(is_telephony=is_telephony)
     persona = PERSONAS[persona_key]
@@ -388,22 +409,22 @@ async def my_agent(ctx: JobContext):
 
     started_at = datetime.now(timezone.utc)
 
-    if persona_key == "leo":
-        _require_env(LEO_ENV_VARS)
+    if persona_key == "ava":
+        _require_env(AVA_ENV_VARS)
         practice = get_shared_practice(is_telephony=is_telephony)
         transfer_to = os.getenv("SIP_TRANSFER_TO", "").strip() or None
-        agent: Agent = LeoReceptionist(
+        agent: Agent = AvaReceptionist(
             branch_id=branch_id,
             practice=practice,
             transfer_to=transfer_to,
         )
         # OpenAI Realtime is speech-to-speech; no AssemblyAI/Groq/Cartesia pipeline.
         # Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/
-        session = AgentSession()
+        session = _build_ava_session()
     else:
-        _require_env(AVA_ENV_VARS)
+        _require_env(GENERIC_ENV_VARS)
         agent = Assistant()
-        session = _build_ava_session(persona["voice_id"])
+        session = _build_generic_session(persona["voice_id"])
 
     _register_latency_logging(session)
 
@@ -421,7 +442,7 @@ async def my_agent(ctx: JobContext):
     )
 
     outbound = bool(phone_number) or metadata.get("direction") == "outbound"
-    if persona_key == "leo" and not outbound:
+    if persona_key == "ava" and not outbound:
         await session.generate_reply(
             instructions=inbound_greeting_instructions(branch_id)
         )

@@ -33,12 +33,15 @@ def resolve_leo_voice(env: Mapping[str, str] | None = None) -> str:
 
 
 def leo_realtime_model() -> openai.realtime.RealtimeModel:
-    """OpenAI Realtime speech-to-speech model for Leo telephony.
+    """OpenAI Realtime speech-to-speech model for the dental receptionist.
 
+    Only pass kwargs verified on livekit.plugins.openai.realtime.RealtimeModel
+    (model, voice). Plugin defaults handle turn detection / barge-in.
     Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/
     """
     return openai.realtime.RealtimeModel(
-        model=LEO_REALTIME_MODEL, voice=resolve_leo_voice()
+        model=LEO_REALTIME_MODEL,
+        voice=resolve_leo_voice(),
     )
 
 
@@ -293,6 +296,25 @@ class LeoReceptionist(Agent):
 
         logger.info("transferred call to %s", destination)
         return {"ok": True, "confirmed": True, "transfer_to": destination}
+
+
+def should_offer_inbound_greeting(
+    *,
+    persona_key: str,
+    outbound: bool,
+    metadata: Mapping[str, Any] | None = None,
+) -> bool:
+    """True when the dental Realtime receptionist should speak first.
+
+    Inbound SIP and the staff portal (Call Ava) greet immediately after
+    session.start. Outbound waits for the callee. Docs:
+    https://docs.livekit.io/telephony/accepting-calls/workflow-setup/
+    https://docs.livekit.io/agents/multimodality/audio/
+    """
+    if outbound:
+        return False
+    meta = metadata or {}
+    return persona_key == "leo" or meta.get("source") == "portal"
 
 
 def inbound_greeting_instructions(branch_id: str) -> str:

@@ -1,7 +1,8 @@
-"""Clinic-staff web portal for Shellharbour Dentists Leo.
+"""Clinic-staff web portal for Strategybyte Ava desk.
 
 Serves branch facts, the mock diary, booking mutations, and a LiveKit token
-so the browser can talk to the running Leo worker. Secrets stay on the server.
+so the browser can talk to the dental Realtime receptionist. Secrets stay
+on the server.
 
 Docs: https://docs.livekit.io/agents/server/agent-dispatch/
       https://docs.livekit.io/frontends/build/authentication/
@@ -81,7 +82,7 @@ def create_app(
     portal_password: str | None = None,
 ) -> FastAPI:
     """Build the portal app. Tests pass an in-memory PracticeClient."""
-    app = FastAPI(title="Shellharbour Dentists — Leo desk", docs_url=None)
+    app = FastAPI(title="Strategybyte — Ava desk", docs_url=None)
     app.state.practice = practice
     app.state.portal_password = (
         portal_password
@@ -254,7 +255,7 @@ def create_app(
 
     @app.post("/api/token")
     async def token(body: TokenBody, request: Request) -> dict[str, str]:
-        """Mint a LiveKit room token that dispatches Leo.
+        """Mint a LiveKit room token that dispatches the dental receptionist.
 
         Docs: https://docs.livekit.io/agents/server/agent-dispatch/
         """
@@ -267,7 +268,7 @@ def create_app(
                 status_code=503,
                 detail=(
                     "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET are "
-                    "required to call Leo from the browser."
+                    "required to call Ava from the browser."
                 ),
             )
 
@@ -279,7 +280,7 @@ def create_app(
         )
 
         branch = get_branch(body.branch_id)
-        room = f"leo-portal-{branch.id}-{uuid.uuid4().hex[:8]}"
+        room = f"ava-desk-{branch.id}-{uuid.uuid4().hex[:8]}"
         identity = body.identity or f"staff-{uuid.uuid4().hex[:6]}"
         metadata = json.dumps(
             {

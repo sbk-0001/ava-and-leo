@@ -22,7 +22,11 @@ from livekit.agents import (
 from livekit.agents.llm import ChatMessage
 from livekit.plugins import ai_coustics, assemblyai, cartesia, groq
 
-from leo import LeoReceptionist, inbound_greeting_instructions
+from leo import (
+    LeoReceptionist,
+    inbound_greeting_instructions,
+    should_offer_inbound_greeting,
+)
 from persona import VALID_PERSONAS, resolve_persona
 from practice import get_shared_practice
 from sip_utils import (
@@ -421,7 +425,14 @@ async def my_agent(ctx: JobContext):
     )
 
     outbound = bool(phone_number) or metadata.get("direction") == "outbound"
-    if persona_key == "leo" and not outbound:
+    # Dental Realtime path (portal Call Ava + inbound SIP): greet immediately
+    # so the caller hears speech without waiting to speak first.
+    # Docs: https://docs.livekit.io/telephony/accepting-calls/workflow-setup/
+    if should_offer_inbound_greeting(
+        persona_key=persona_key,
+        outbound=bool(outbound),
+        metadata=metadata,
+    ):
         await session.generate_reply(
             instructions=inbound_greeting_instructions(branch_id)
         )

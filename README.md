@@ -11,7 +11,7 @@ LiveKit Agents project with two personas:
 | `ava` | Generic voice assistant | AssemblyAI STT + Groq LLM + Cartesia TTS |
 | `leo` | Phone receptionist for Shellharbour Dentists (Barrack Heights, Dapto, Woonona) | OpenAI Realtime (`gpt-realtime`, voice **marin**) |
 
-Unset `AGENT_PERSONA` defaults to **leo on telephony** (SIP inbound or outbound) and **ava** on web/console. The clinic portal always asks for Leo (`persona: leo` in the room token).
+Unset `AGENT_PERSONA` defaults to **leo on telephony** (SIP inbound or outbound) and **ava** on web/console. The Strategybyte **Ava desk** portal always dispatches the dental Realtime receptionist (`persona: leo` in the room token) and greets immediately after `session.start`.
 
 Leo's spoken style, branch facts, fee catalogue, and tool rules live in [`src/persona.py`](src/persona.py). Parking, hours, and dentist names are filled from the official sites (2026-09-14). Fields marked `VERIFY` are unknown — Leo must not invent them. Say **confirmed** only after a book/reschedule/cancel tool returns `confirmed: true`.
 
@@ -28,7 +28,7 @@ uv sync
 
 | Variable | Used by |
 |----------|---------|
-| `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Agent worker, portal “Call Leo”, outbound `make_call.py`, evals |
+| `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Agent worker, portal “Call Ava”, outbound `make_call.py`, evals |
 | `OPENAI_API_KEY` | Leo (OpenAI Realtime) |
 | `ASSEMBLYAI_API_KEY`, `GROQ_API_KEY`, `CARTESIA_API_KEY` | Ava pipeline only |
 
@@ -39,9 +39,9 @@ lk cloud auth
 lk app env --write --destination .env.local
 ```
 
-### Local clinic portal (agent + diary + Call Leo)
+### Local clinic portal (agent + diary + Call Ava)
 
-One command starts the mock diary, the Leo worker, and the staff portal:
+One command starts the mock diary, the dental receptionist worker, and the Strategybyte staff portal:
 
 ```bash
 # .env.local should include LIVEKIT_*, OPENAI_API_KEY
@@ -56,7 +56,7 @@ Then open **http://127.0.0.1:8787**
 | See a branch | Use the Barrack Heights / Dapto / Woonona tabs. Address, phone, hours, parking, and dentists are on the left. |
 | Book | Pick a date, tap **Book** on an open slot, enter name + mobile, confirm. The diary only says confirmed after the mock mutation succeeds. |
 | Reschedule / cancel | On a booked row, **Reschedule** (moves to an open slot that day) or **Cancel**. |
-| Talk to Leo | Tap **Call Leo**. Allow the microphone. The portal mints a LiveKit token on the server (keys never go in frontend source) and dispatches `ava-and-leo`. Hang up when finished. |
+| Talk to Ava | Tap **Call Ava**. Allow the microphone. The portal mints a LiveKit token on the server (keys never go in frontend source), plays remote audio in the browser, and dispatches `ava-and-leo` with `persona: leo`. Hang up when finished. |
 
 Auth: empty `PORTAL_PASSWORD` is open **on localhost only**. Set `PORTAL_PASSWORD` before exposing the portal. Do not put LiveKit secrets in the browser.
 
@@ -139,7 +139,7 @@ src/agent.py          # entrypoint: Ava pipeline or Leo Realtime
 src/persona.py        # Leo prompts, branches, fees (source of truth)
 src/leo.py            # LeoReceptionist + office-system tools
 src/practice.py       # disconnected / mock practice software
-src/portal.py         # FastAPI clinic desk (facts, diary, Call Leo token)
+src/portal.py         # FastAPI Ava desk (facts, diary, Call Ava token)
 src/portal_static/    # portal UI
 src/run_local.py      # one-command agent + portal
 src/sip_utils.py      # DID map, disconnect handling

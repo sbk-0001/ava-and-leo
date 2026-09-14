@@ -3,11 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Leo desk — Shellharbour Dentists</title>
+    <title>Ava desk — Strategybyte</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
       rel="stylesheet"
     />
     <link rel="stylesheet" href="/static/styles.css" />
@@ -15,8 +15,8 @@
   <body>
     <div id="login-gate" class="gate hidden">
       <form id="login-form" class="card gate-card">
-        <p class="eyebrow">Shellharbour Dentists</p>
-        <h1>Leo desk</h1>
+        <p class="eyebrow">Strategybyte</p>
+        <h1>Ava desk</h1>
         <p class="muted">Enter the shared portal password to continue.</p>
         <label>
           Password
@@ -29,18 +29,19 @@
 
     <header class="topbar">
       <div>
-        <p class="eyebrow">Illawarra group</p>
-        <h1>Leo desk</h1>
+        <p class="eyebrow">Strategybyte</p>
+        <h1>Ava desk</h1>
       </div>
       <div class="topbar-actions">
         <p id="auth-note" class="muted auth-note"></p>
-        <button id="call-leo" type="button" class="call-btn">Call Leo</button>
+        <button id="call-ava" type="button" class="call-btn">Call Ava</button>
         <button id="hang-up" type="button" class="ghost hidden">Hang up</button>
       </div>
     </header>
+    <div class="gold-bar" aria-hidden="true"></div>
 
     <div id="call-status" class="call-status hidden" role="status"></div>
-    <div id="remote-audio"></div>
+    <div id="remote-audio" hidden></div>
 
     <nav id="branch-tabs" class="tabs" aria-label="Branches"></nav>
 

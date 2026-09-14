@@ -16,7 +16,7 @@ name = "agent-starter-python"
 version = "1.0.0"
 source = { editable = "." }
 dependencies = [
-    { name = "livekit-agents" },
+    { name = "livekit-agents", extra = ["openai"] },
     { name = "livekit-plugins-ai-coustics" },
     { name = "livekit-plugins-assemblyai" },
     { name = "livekit-plugins-cartesia" },
@@ -34,7 +34,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "livekit-agents", specifier = ">=1.6.1" },
+    { name = "livekit-agents", extras = ["openai"], specifier = ">=1.6.1" },
     { name = "livekit-plugins-ai-coustics", specifier = "~=0.2" },
     { name = "livekit-plugins-assemblyai", specifier = ">=1.6.4" },
     { name = "livekit-plugins-cartesia", specifier = ">=1.6.4" },

@@ -2,8 +2,10 @@ import logging
 import os
 import textwrap
 from datetime import datetime, timezone
+from typing import Any
 
 from dotenv import load_dotenv
+from livekit import api
 from livekit.agents import (
     Agent,
     AgentServer,
@@ -20,6 +22,18 @@ from livekit.agents import (
 from livekit.agents.llm import ChatMessage
 from livekit.plugins import ai_coustics, assemblyai, cartesia, groq
 
+from leo import LeoReceptionist, inbound_greeting_instructions
+from persona import resolve_persona
+from practice import practice_from_env
+from sip_utils import (
+    SIP_CALL_ERRORS,
+    branch_from_participant,
+    is_sip_participant,
+    parse_job_metadata,
+    register_sip_disconnect_handler,
+    sip_error_details,
+)
+
 logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
@@ -31,43 +45,24 @@ CARTESIA_TTS_MODEL = "sonic-3"
 
 # Cartesia Sonic-3 voice IDs (swap for exact production voices later).
 AVA_VOICE_ID = "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"  # Jacqueline — American female
-LEO_VOICE_ID = "a167e0f3-df7e-4d52-a9c3-f949145efdab"  # Blake — American male
+LEO_VOICE_ID = (
+    "a167e0f3-df7e-4d52-a9c3-f949145efdab"  # Blake — American male (Ava-path unused)
+)
 
 # Each persona picks BOTH a TTS voice and the agent_name written to Supabase.
+# Leo telephony uses OpenAI Realtime instead of this Cartesia voice.
 PERSONAS = {
     "ava": {"agent_name": "ava", "voice_id": AVA_VOICE_ID},
     "leo": {"agent_name": "leo", "voice_id": LEO_VOICE_ID},
 }
-DEFAULT_PERSONA = "ava"
+
+AVA_ENV_VARS = ("ASSEMBLYAI_API_KEY", "GROQ_API_KEY", "CARTESIA_API_KEY")
+LEO_ENV_VARS = ("OPENAI_API_KEY",)
 
 
-def resolve_persona() -> tuple[str, dict[str, str]]:
-    """Resolve the active persona from AGENT_PERSONA.
-
-    Called inside the entrypoint (not at import time) so it always reflects the
-    live environment of the job process, after .env is loaded. The framework
-    runs each job in its own subprocess, so reading this at module scope is not
-    reliable; the entrypoint is the one place guaranteed to see the runtime env.
-
-    Returns the persona key and its config (agent_name + Cartesia voice id).
-    """
-    key = os.getenv("AGENT_PERSONA", DEFAULT_PERSONA).strip().lower()
-    if key not in PERSONAS:
-        logger.warning(
-            f"Unknown AGENT_PERSONA={key!r}; falling back to {DEFAULT_PERSONA!r}. "
-            f"Valid options: {', '.join(PERSONAS)}."
-        )
-        key = DEFAULT_PERSONA
-    return key, PERSONAS[key]
-
-
-# Provider API keys required by the model stack above.
-REQUIRED_ENV_VARS = ("ASSEMBLYAI_API_KEY", "GROQ_API_KEY", "CARTESIA_API_KEY")
-
-
-def _require_env() -> None:
+def _require_env(names: tuple[str, ...]) -> None:
     """Fail loudly (naming the missing var) instead of crashing deep in a plugin."""
-    missing = [name for name in REQUIRED_ENV_VARS if not os.getenv(name)]
+    missing = [name for name in names if not os.getenv(name)]
     if missing:
         message = (
             "Missing required environment variable(s): "
@@ -83,6 +78,14 @@ def _fmt_ms(seconds: float | None) -> str:
     if isinstance(seconds, (int, float)):
         return f"{seconds * 1000:.0f}ms"
     return "n/a"
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes"}
 
 
 def _register_latency_logging(session: AgentSession) -> None:
@@ -266,103 +269,155 @@ def _save_call_to_supabase(
         print(f"[supabase] failed to save call transcript: {exc}")
 
 
-server = AgentServer()
+async def _place_outbound_call(ctx: JobContext, phone_number: str) -> bool:
+    """Dial via CreateSIPParticipant and wait until answered.
+
+    Docs: https://docs.livekit.io/telephony/making-calls/outbound-calls/
+    """
+    trunk_id = os.getenv("SIP_OUTBOUND_TRUNK_ID", "").strip()
+    if not trunk_id:
+        logger.error(
+            "SIP_OUTBOUND_TRUNK_ID is required for agent-initiated outbound calls"
+        )
+        ctx.shutdown(reason="missing_sip_outbound_trunk")
+        return False
+
+    try:
+        await ctx.api.sip.create_sip_participant(
+            api.CreateSIPParticipantRequest(
+                room_name=ctx.room.name,
+                sip_trunk_id=trunk_id,
+                sip_call_to=phone_number,
+                participant_identity=phone_number,
+                wait_until_answered=True,
+                play_dialtone=True,
+            )
+        )
+        logger.info("Outbound call picked up: %s", phone_number)
+        return True
+    except SIP_CALL_ERRORS as exc:
+        code, status = sip_error_details(exc)
+        logger.error("Outbound call failed: %s %s", code, status)
+        ctx.shutdown(reason=f"sip_call_failed:{code or 'unknown'}")
+        return False
 
 
-@server.rtc_session(agent_name="ava-and-leo")
-async def my_agent(ctx: JobContext):
-    # Fail fast with a clear, named error if any provider key is missing.
-    _require_env()
-
-    # Resolve the persona here (in the job process, after env is loaded) so
-    # AGENT_PERSONA always takes effect. Drives BOTH the TTS voice and the
-    # agent_name written to Supabase.
-    persona_key, persona = resolve_persona()
-    agent_name = persona["agent_name"]
-    voice_id = persona["voice_id"]
-    logger.info(
-        f"persona resolved: {persona_key} (voice={voice_id}, agent_name={agent_name})"
-    )
-
-    # Logging setup
-    # Add any other context you want in all log entries here
-    ctx.log_context_fields = {
-        "room": ctx.room.name,
-        "persona": agent_name,
-    }
-
-    # Set up the production voice AI pipeline: AssemblyAI STT, Cartesia TTS, and
-    # the LiveKit turn detector. The Groq LLM lives on the Assistant agent. The
-    # TTS voice and the persona's agent_name are driven by AGENT_PERSONA.
-    session = AgentSession(
-        # Speech-to-text (STT) is your agent's ears, turning the user's speech into text that the LLM can understand
+def _build_ava_session(voice_id: str) -> AgentSession:
+    return AgentSession(
         stt=assemblyai.STT(model=ASSEMBLYAI_STT_MODEL),
-        # Text-to-speech (TTS) is your agent's voice, turning the LLM's text into speech that the user can hear
         tts=cartesia.TTS(model=CARTESIA_TTS_MODEL, voice=voice_id),
-        # The LiveKit turn detector determines when the user is done speaking and the agent should respond.
-        # TurnDetector is an end-of-turn model that listens to the user's audio directly, combining
-        # semantic understanding with acoustic cues (intonation, pitch, rhythm) for state-of-the-art accuracy.
-        # AgentSession supplies the required VAD automatically.
-        # See more at https://docs.livekit.io/agents/build/turns
         turn_handling=TurnHandlingOptions(
             turn_detection=inference.TurnDetector(),
-            # Endpointing = how long to wait after speech before committing the
-            # turn. The audio turn detector's defaults are min_delay=0.3,
-            # max_delay=2.5. We drop min_delay to 0.2s so the agent starts
-            # replying ~100ms sooner; the detector's semantic model still gates
-            # the commit, so this rarely clips mid-sentence. max_delay stays at
-            # 2.5s so slow speakers / pauses aren't cut off.
             endpointing=EndpointingOptions(mode="fixed", min_delay=0.2, max_delay=2.5),
-            # Preemptive generation: run the LLM (and here, TTS too) before the
-            # end of turn is confirmed, so the first audio byte is ready sooner.
-            # Tradeoff: on a false end-of-turn the speculative reply is discarded,
-            # costing some extra LLM/TTS compute. See:
-            # https://docs.livekit.io/agents/build/audio/#preemptive-generation
             preemptive_generation=PreemptiveGenerationOptions(
                 enabled=True, preemptive_tts=True
             ),
         ),
     )
 
-    # Log per-stage latency for every turn (off the hot path; logging only).
-    _register_latency_logging(session)
 
-    # Record when the call began so we can compute its duration on shutdown.
+def _room_options() -> room_io.RoomOptions:
+    return room_io.RoomOptions(
+        audio_input=room_io.AudioInputOptions(
+            noise_cancellation=ai_coustics.audio_enhancement(
+                model=ai_coustics.EnhancerModel.QUAIL_VF_S
+            ),
+        ),
+    )
+
+
+server = AgentServer()
+
+
+@server.rtc_session(agent_name="ava-and-leo")
+async def my_agent(ctx: JobContext):
+    metadata = parse_job_metadata(getattr(ctx.job, "metadata", None))
+    phone_number = metadata.get("phone_number")
+    if isinstance(phone_number, str):
+        phone_number = phone_number.strip() or None
+    else:
+        phone_number = None
+
+    # Join the room first so we can wait for the caller (web or SIP).
+    await ctx.connect()
+
+    sip_identity = phone_number
+    if (
+        phone_number
+        and _as_bool(metadata.get("dial_from_agent"), default=True)
+        and not await _place_outbound_call(ctx, phone_number)
+    ):
+        return
+
+    register_sip_disconnect_handler(ctx, sip_identity)
+
+    if sip_identity:
+        participant = await ctx.wait_for_participant(identity=sip_identity)
+    else:
+        participant = await ctx.wait_for_participant()
+
+    is_telephony = is_sip_participant(participant) or bool(phone_number)
+    persona_key = resolve_persona(is_telephony=is_telephony)
+    persona = PERSONAS[persona_key]
+    agent_name = persona["agent_name"]
+    logger.info(
+        "persona resolved: %s (telephony=%s, agent_name=%s)",
+        persona_key,
+        is_telephony,
+        agent_name,
+    )
+
+    ctx.log_context_fields = {
+        "room": ctx.room.name,
+        "persona": agent_name,
+    }
+
+    metadata_branch = metadata.get("branch")
+    branch_id = (
+        metadata_branch
+        if isinstance(metadata_branch, str) and metadata_branch.strip()
+        else branch_from_participant(participant)
+    )
+
     started_at = datetime.now(timezone.utc)
 
-    # When the session ends, save the full transcript (attributed to this
-    # persona) to Supabase. session.history is finalized by this point.
+    if persona_key == "leo":
+        _require_env(LEO_ENV_VARS)
+        practice = practice_from_env()
+        transfer_to = os.getenv("SIP_TRANSFER_TO", "").strip() or None
+        agent: Agent = LeoReceptionist(
+            branch_id=branch_id,
+            practice=practice,
+            transfer_to=transfer_to,
+        )
+        # OpenAI Realtime is speech-to-speech; no AssemblyAI/Groq/Cartesia pipeline.
+        # Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/
+        session = AgentSession()
+    else:
+        _require_env(AVA_ENV_VARS)
+        agent = Assistant()
+        session = _build_ava_session(persona["voice_id"])
+
+    _register_latency_logging(session)
+
     async def on_shutdown() -> None:
         _save_call_to_supabase(session, ctx, agent_name, started_at)
 
     ctx.add_shutdown_callback(on_shutdown)
 
-    # Start the session, which initializes the voice pipeline and warms up the models
+    # Start after the callee has joined so outbound greetings are not clipped.
+    # Docs: https://docs.livekit.io/telephony/making-calls/outbound-calls/
     await session.start(
-        agent=Assistant(),
+        agent=agent,
         room=ctx.room,
-        room_options=room_io.RoomOptions(
-            audio_input=room_io.AudioInputOptions(
-                noise_cancellation=ai_coustics.audio_enhancement(
-                    model=ai_coustics.EnhancerModel.QUAIL_VF_S
-                ),
-            ),
-        ),
+        room_options=_room_options(),
     )
 
-    # # Add a virtual avatar to the session, if desired
-    # # For other providers, see https://docs.livekit.io/agents/models/avatar/
-    # avatar = anam.AvatarSession(
-    #     persona_config=anam.PersonaConfig(
-    #         name="...",
-    #         avatarId="...",  # See https://docs.livekit.io/agents/models/avatar/plugins/anam
-    #     ),
-    # )
-    # # Start the avatar and wait for it to join
-    # await avatar.start(session, room=ctx.room)
-
-    # Join the room and connect to the user
-    await ctx.connect()
+    outbound = bool(phone_number) or metadata.get("direction") == "outbound"
+    if persona_key == "leo" and not outbound:
+        await session.generate_reply(
+            instructions=inbound_greeting_instructions(branch_id)
+        )
 
 
 if __name__ == "__main__":

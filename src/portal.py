@@ -1,7 +1,8 @@
-"""Clinic-staff web portal for Shellharbour Dentists Leo.
+"""Clinic-staff web portal for Strategybyte Ava desk.
 
 Serves branch facts, the mock diary, booking mutations, and a LiveKit token
-so the browser can talk to the running Leo worker. Secrets stay on the server.
+so the browser can talk to the dental Realtime receptionist. Secrets stay
+on the server.
 
 Docs: https://docs.livekit.io/agents/server/agent-dispatch/
       https://docs.livekit.io/frontends/build/authentication/
@@ -31,7 +32,7 @@ load_dotenv(".env.local")
 
 AGENT_NAME = "ava-and-leo"
 STATIC_DIR = Path(__file__).parent / "portal_static"
-COOKIE_NAME = "leo_portal"
+COOKIE_NAME = "ava_desk"
 
 
 class LoginBody(BaseModel):
@@ -81,7 +82,7 @@ def create_app(
     portal_password: str | None = None,
 ) -> FastAPI:
     """Build the portal app. Tests pass an in-memory PracticeClient."""
-    app = FastAPI(title="Shellharbour Dentists — Leo desk", docs_url=None)
+    app = FastAPI(title="Strategybyte — Ava desk", docs_url=None)
     app.state.practice = practice
     app.state.portal_password = (
         portal_password
@@ -119,7 +120,12 @@ def create_app(
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
-        return {"ok": "true", "service": "leo-portal"}
+        client = app.state.practice or get_shared_practice(is_telephony=False)
+        return {
+            "ok": "true",
+            "service": "ava-desk",
+            "diary_store": getattr(client, "store_kind", "memory"),
+        }
 
     @app.get("/api/config")
     async def config(request: Request) -> dict[str, Any]:
@@ -146,10 +152,16 @@ def create_app(
             "persona": "leo",
             "voice": os.getenv("LEO_REALTIME_VOICE", "marin") or "marin",
             "practice_mode": _practice().mode,
+            "brand": "Strategybyte",
+            "product": "Ava desk",
+            "call_label": "Call Ava",
+            "diary_store": getattr(_practice(), "store_kind", "memory"),
         }
 
     @app.post("/api/login")
-    async def login(body: LoginBody, response: Response) -> dict[str, bool]:
+    async def login(
+        body: LoginBody, request: Request, response: Response
+    ) -> dict[str, bool]:
         password = app.state.portal_password
         if not password or not hmac.compare_digest(body.password, password):
             raise HTTPException(status_code=401, detail="Wrong password.")
@@ -158,6 +170,7 @@ def create_app(
             _cookie_digest(password),
             httponly=True,
             samesite="lax",
+            secure=not _is_loopback(request),
             max_age=60 * 60 * 12,
         )
         return {"ok": True}
@@ -254,7 +267,7 @@ def create_app(
 
     @app.post("/api/token")
     async def token(body: TokenBody, request: Request) -> dict[str, str]:
-        """Mint a LiveKit room token that dispatches Leo.
+        """Mint a LiveKit room token that dispatches the dental receptionist.
 
         Docs: https://docs.livekit.io/agents/server/agent-dispatch/
         """
@@ -267,7 +280,7 @@ def create_app(
                 status_code=503,
                 detail=(
                     "LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET are "
-                    "required to call Leo from the browser."
+                    "required to call Ava from the browser."
                 ),
             )
 
@@ -279,7 +292,7 @@ def create_app(
         )
 
         branch = get_branch(body.branch_id)
-        room = f"leo-portal-{branch.id}-{uuid.uuid4().hex[:8]}"
+        room = f"ava-desk-{branch.id}-{uuid.uuid4().hex[:8]}"
         identity = body.identity or f"staff-{uuid.uuid4().hex[:6]}"
         metadata = json.dumps(
             {

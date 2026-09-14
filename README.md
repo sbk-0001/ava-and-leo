@@ -39,9 +39,9 @@ lk cloud auth
 lk app env --write --destination .env.local
 ```
 
-### Local clinic portal (agent + diary + Call Leo)
+### Local clinic portal (agent + diary + Call Ava)
 
-One command starts the mock diary, the Leo worker, and the staff portal:
+One command starts the mock diary, the dental receptionist worker, and the Strategybyte Ava desk:
 
 ```bash
 # .env.local should include LIVEKIT_*, OPENAI_API_KEY
@@ -56,11 +56,11 @@ Then open **http://127.0.0.1:8787**
 | See a branch | Use the Barrack Heights / Dapto / Woonona tabs. Address, phone, hours, parking, and dentists are on the left. |
 | Book | Pick a date, tap **Book** on an open slot, enter name + mobile, confirm. The diary only says confirmed after the mock mutation succeeds. |
 | Reschedule / cancel | On a booked row, **Reschedule** (moves to an open slot that day) or **Cancel**. |
-| Talk to Leo | Tap **Call Leo**. Allow the microphone. The portal mints a LiveKit token on the server (keys never go in frontend source) and dispatches `ava-and-leo`. Hang up when finished. |
+| Talk to Ava | Tap **Call Ava**. Allow the microphone. The portal mints a LiveKit token on the server (keys never go in frontend source) and dispatches `ava-and-leo` with `persona: leo` (OpenAI Realtime, marin). Hang up when finished. |
 
-Auth: empty `PORTAL_PASSWORD` is open **on localhost only**. Set `PORTAL_PASSWORD` before exposing the portal. Do not put LiveKit secrets in the browser.
+Auth: empty `PORTAL_PASSWORD` is open **on localhost only**. Set `PORTAL_PASSWORD` before exposing the portal (required on Vercel). Do not put LiveKit secrets in the browser.
 
-You can also run the two processes yourself (they share `.data/mock_diary.json`):
+You can also run the two processes yourself (they share `.data/mock_diary.json` locally):
 
 ```bash
 AGENT_PERSONA=leo PRACTICE_SOFTWARE=mock LEO_REALTIME_VOICE=marin \
@@ -139,11 +139,16 @@ src/agent.py          # entrypoint: Ava pipeline or Leo Realtime
 src/persona.py        # Leo prompts, branches, fees (source of truth)
 src/leo.py            # LeoReceptionist + office-system tools
 src/practice.py       # disconnected / mock practice software
-src/portal.py         # FastAPI clinic desk (facts, diary, Call Leo token)
+src/diary_store.py    # file / Redis / optional Supabase diary backends
+src/portal.py         # FastAPI Strategybyte Ava desk
+src/main.py           # Vercel FastAPI entrypoint
 src/portal_static/    # portal UI
 src/run_local.py      # one-command agent + portal
 src/sip_utils.py      # DID map, disconnect handling
 src/make_call.py      # outbound dispatch + SIP dial
+Dockerfile            # LiveKit Cloud worker (`src/agent.py start`)
+vercel.json           # public portal
+requirements-portal.txt
 ```
 
 ## Docs
@@ -158,9 +163,94 @@ LiveKit Agents and telephony APIs change quickly. Use current docs:
 
 The [LiveKit CLI](https://docs.livekit.io/intro/basics/cli/) `lk docs` subcommand (v2.15.0+) searches the same documentation.
 
-## Deploy
+## Share with a partner
 
-The `Dockerfile` is ready for [LiveKit Cloud agents](https://docs.livekit.io/deploy/agents/). Set `AGENT_PERSONA` / `OPENAI_API_KEY` / SIP vars as secrets on the agent. The clinic portal is for local/dev (`run_local.py`); do not expose it without `PORTAL_PASSWORD`.
+Give the partner the **same Strategybyte Ava desk** and the **same Call Ava voice** as a local demo — not a tunnel to a Mac. Host two things:
+
+1. **LiveKit Cloud agent** — the Realtime dental receptionist (`agent_name` `ava-and-leo`)
+2. **Vercel portal** — public URL + `PORTAL_PASSWORD`
+
+Both of you tap **Call Ava** against the **cloud** worker so latency matches.
+
+### 1. Deploy the agent to LiveKit Cloud
+
+The `Dockerfile` already starts `src/agent.py start`. Confirm you are on CLI 2.15.0+ (`lk --version`). Docs: [agent deploy quickstart](https://docs.livekit.io/deploy/agents/quickstart/), [secrets](https://docs.livekit.io/deploy/agents/secrets/), [CLI agent commands](https://docs.livekit.io/reference/developer-tools/livekit-cli/agent/).
+
+```bash
+lk cloud auth
+lk project list
+# Select the project whose URL is wss://shellharbour-cqvf1jsj.livekit.cloud
+lk project set-default "<that-project-name>"
+
+# First deploy only. Writes livekit.toml (gitignored). Copies secrets except LIVEKIT_*.
+# Fill .env.agent from .env.agent.example first (never commit it).
+lk agent create --secrets-file .env.agent
+
+# Later deploys:
+lk agent deploy
+lk agent status
+lk agent logs
+```
+
+Cloud injects `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET`. Do not set those as agent secrets.
+
+| Agent secret | Value |
+|--------------|--------|
+| `OPENAI_API_KEY` | Realtime key |
+| `AGENT_PERSONA` | `leo` for the dental path (portal tokens also send `persona: leo`). `ava` is the generic STT/LLM/TTS pipeline unless the token overrides it. |
+| `PRACTICE_SOFTWARE` | `mock` |
+| `LEO_REALTIME_VOICE` | `marin` |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Same Redis as the portal so the desk and Call Ava share one diary |
+| `DIARY_STORE` | `redis` (recommended) |
+
+`PORTAL_*` is not required on the agent.
+
+**Stop the local Mac worker** (`run_local.py` / `src/agent.py dev`) while the cloud agent is live. Two workers (double workers) both register as `ava-and-leo` and steal jobs from each other. To run a second agent in the same project you must change `agent_name` in source and redeploy — do not do that for this partner share.
+
+### 2. Deploy the Strategybyte portal to Vercel
+
+The desk is FastAPI (`src/portal.py`, Vercel entry `src/main.py`). Brand: navy `#091736`, gold `#FFC605`, blue `#0061FF`, cream `#FFEFD7`.
+
+```bash
+# From the repo root. Or Import the GitHub repo in the Vercel dashboard.
+npx vercel --prod
+```
+
+Set these **Vercel project env vars** (Production):
+
+| Portal env | Notes |
+|------------|--------|
+| `LIVEKIT_URL` | `wss://shellharbour-cqvf1jsj.livekit.cloud` |
+| `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` | Same LiveKit Cloud project as the agent |
+| `PORTAL_PASSWORD` | **Required** on Vercel (not localhost). Share this with the partner. |
+| `PRACTICE_SOFTWARE` | `mock` |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Durable diary for two users |
+| `DIARY_STORE` | `redis` |
+
+Optional instead of Redis: run `supabase/mock_diary.sql`, set `MOCK_DIARY_TABLE=mock_diary` plus `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. Local fallback without Redis/Supabase is an in-memory/file diary (file is wrong on Vercel — ephemeral).
+
+`requirements-portal.txt` keeps the Vercel bundle off `livekit-agents`. The voice worker stays on LiveKit Cloud.
+
+### 3. Send the partner
+
+- The Vercel URL (for example `https://<project>.vercel.app`)
+- `PORTAL_PASSWORD`
+
+They open the desk, pick a branch, and tap **Call Ava**. No SSH tunnel, no Mac left running.
+
+### Coordinator env checklist (do not commit values)
+
+This repo does not deploy with production secrets. Whoever has the LiveKit / OpenAI / Upstash keys should set:
+
+- LiveKit Cloud agent: `.env.agent` → `lk agent create` / `lk agent update-secrets`
+- Vercel: dashboard env vars listed above
+- Upstash Redis (or Supabase table) created once and pasted into **both** the agent and the portal
+
+## Deploy (reference)
+
+- Agent: [LiveKit Cloud agents](https://docs.livekit.io/deploy/agents/) via the `Dockerfile` (`CMD` → `uv run src/agent.py start`).
+- Portal: Vercel FastAPI (`src/main.py`) or local `uvicorn portal:app --app-dir src`.
+- Do not expose the portal without `PORTAL_PASSWORD`.
 
 ## License
 

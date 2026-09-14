@@ -1,0 +1,11 @@
+# Copy to livekit.toml after the first `lk agent create`, or generate with:
+#   lk agent config --id CA_...
+#
+# Project: wss://shellharbour-cqvf1jsj.livekit.cloud
+# Dispatch name in source: ava-and-leo (src/agent.py). Do not invent a second name.
+
+[project]
+  subdomain = "shellharbour-cqvf1jsj"
+
+# [agent]
+#   id = "CA_xxxxxxxx"  # written by `lk agent create`

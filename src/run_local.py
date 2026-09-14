@@ -1,4 +1,4 @@
-"""Run mock diary + Leo worker + clinic portal together for local demo.
+"""Run mock diary + dental receptionist worker + Ava desk together.
 
 Usage:
     uv run python src/run_local.py
@@ -43,7 +43,7 @@ def _start_portal() -> str:
             access_log=False,
         )
     )
-    thread = threading.Thread(target=server.run, name="leo-portal", daemon=True)
+    thread = threading.Thread(target=server.run, name="ava-desk", daemon=True)
     thread.start()
     return f"http://{host}:{port}"
 
@@ -52,8 +52,8 @@ def main() -> None:
     url = _start_portal()
     password = os.getenv("PORTAL_PASSWORD", "").strip()
     print()
-    print(f"Leo clinic portal: {url}")
-    print("  Pick a branch, book in the mock diary, then Call Leo.")
+    print(f"Strategybyte Ava desk: {url}")
+    print("  Pick a branch, book in the mock diary, then Call Ava.")
     if password:
         print("  Auth: PORTAL_PASSWORD is set (shared gate).")
     else:

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "pip install -r requirements-portal.txt",
+  "functions": {
+    "src/main.py": {
+      "maxDuration": 30,
+      "excludeFiles": "{tests/**,.venv/**,.data/**,.github/**,.claude/**,.agents/**,eval/**,evals/**}"
+    }
+  }
+}

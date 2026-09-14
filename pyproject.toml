@@ -33,6 +33,9 @@ dev = [
 # install on Python 3.11+. Remove this once upstream uploads the remaining wheels.
 constraint-dependencies = ["yarl<1.24"]
 
+[tool.vercel]
+entrypoint = "src.main:app"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
@@ -53,7 +56,7 @@ select = ["E", "F", "W", "I", "N", "B", "A", "C4", "UP", "SIM", "RUF"]
 ignore = ["E501"]  # Line too long (handled by formatter)
 
 [tool.ruff.lint.isort]
-known-first-party = ["agent", "leo", "make_call", "persona", "portal", "practice", "run_local", "sip_utils"]
+known-first-party = ["agent", "diary_store", "leo", "make_call", "persona", "portal", "practice", "run_local", "sip_utils"]
 
 [tool.ruff.format]
 quote-style = "double"

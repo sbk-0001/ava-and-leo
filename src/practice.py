@@ -10,7 +10,6 @@ portal and the voice agent can share the same diary.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import sys
@@ -22,11 +21,20 @@ from pathlib import Path
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
+from diary_store import DiaryStore, FileDiaryStore, diary_store_from_env
 from persona import BRANCHES, VERIFY
 
 PracticeMode = Literal["disconnected", "mock"]
 SYDNEY = ZoneInfo("Australia/Sydney")
 DEFAULT_MOCK_PATH = Path(".data/mock_diary.json")
+
+__all__ = [
+    "PracticeClient",
+    "get_shared_practice",
+    "practice_from_env",
+    "reset_shared_practice",
+    "seed_mock_diary",
+]
 
 
 def _norm_text(value: str) -> str:
@@ -107,10 +115,20 @@ class PracticeClient:
 
     mode: PracticeMode = "disconnected"
     persist_path: Path | None = None
+    store: DiaryStore | None = None
+    store_kind: str = "memory"
     patients: dict[str, Patient] = field(default_factory=dict)
     slots: dict[str, Slot] = field(default_factory=dict)
     bookings: dict[str, Booking] = field(default_factory=dict)
     messages: list[Message] = field(default_factory=list)
+
+    def _hydrate(self) -> None:
+        """Reload from the durable store so two processes share one diary."""
+        if self.mode != "mock":
+            return
+        if self.store is None and self.persist_path is None:
+            return
+        self.load()
 
     def _unavailable(self, action: str) -> dict[str, Any]:
         return {
@@ -187,6 +205,7 @@ class PracticeClient:
     ) -> dict[str, Any]:
         if self.mode == "disconnected":
             return self._unavailable("find_patient")
+        self._hydrate()
 
         name_n = _norm_text(name)
         phone_n = _norm_phone(phone or "")
@@ -218,6 +237,7 @@ class PracticeClient:
     ) -> dict[str, Any]:
         if self.mode == "disconnected":
             return self._unavailable("get_availability")
+        self._hydrate()
 
         slots = [
             {
@@ -246,6 +266,7 @@ class PracticeClient:
     ) -> dict[str, Any]:
         if self.mode == "disconnected":
             return self._unavailable("list_diary")
+        self._hydrate()
 
         slots = []
         for slot in self.slots.values():
@@ -313,6 +334,7 @@ class PracticeClient:
     ) -> dict[str, Any]:
         if self.mode == "disconnected":
             return self._unavailable("book_appointment")
+        self._hydrate()
 
         slot = self.slots.get(slot_id)
         if slot is None or slot.taken or slot.branch_id != branch_id:
@@ -367,6 +389,7 @@ class PracticeClient:
     ) -> dict[str, Any]:
         if self.mode == "disconnected":
             return self._unavailable("reschedule_appointment")
+        self._hydrate()
 
         booking = self.bookings.get(booking_id)
         new_slot = self.slots.get(new_slot_id)
@@ -402,6 +425,7 @@ class PracticeClient:
     async def cancel_appointment(self, *, booking_id: str) -> dict[str, Any]:
         if self.mode == "disconnected":
             return self._unavailable("cancel_appointment")
+        self._hydrate()
 
         booking = self.bookings.get(booking_id)
         if booking is None or booking.cancelled:
@@ -426,6 +450,7 @@ class PracticeClient:
         phone: str,
         body: str,
     ) -> dict[str, Any]:
+        self._hydrate()
         # Leo can take a message even when the diary is disconnected.
         message = Message(
             message_id=f"msg_{uuid.uuid4().hex[:10]}",
@@ -443,26 +468,31 @@ class PracticeClient:
             "branch_id": branch_id,
         }
 
-    def save(self) -> None:
-        if self.persist_path is None:
-            return
-        path = Path(self.persist_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
+    def _payload(self) -> dict[str, Any]:
+        return {
             "patients": {key: asdict(value) for key, value in self.patients.items()},
             "slots": {key: asdict(value) for key, value in self.slots.items()},
             "bookings": {key: asdict(value) for key, value in self.bookings.items()},
             "messages": [asdict(item) for item in self.messages],
         }
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
-    def load(self) -> None:
+    def save(self) -> None:
+        payload = self._payload()
+        if self.store is not None:
+            self.store.save_payload(payload)
+            return
         if self.persist_path is None:
             return
-        path = Path(self.persist_path)
-        if not path.exists():
+        FileDiaryStore(self.persist_path).save_payload(payload)
+
+    def load(self) -> None:
+        payload: dict[str, Any] | None = None
+        if self.store is not None:
+            payload = self.store.load_payload()
+        elif self.persist_path is not None:
+            payload = FileDiaryStore(self.persist_path).load_payload()
+        if not payload:
             return
-        payload = json.loads(path.read_text(encoding="utf-8"))
         self.patients = {
             key: Patient(**value) for key, value in payload.get("patients", {}).items()
         }
@@ -579,11 +609,19 @@ def practice_from_env(
 ) -> PracticeClient:
     environ = env if env is not None else os.environ
     mode = _resolve_mode(is_telephony=is_telephony, env=environ)
+    store: DiaryStore | None = None
+    store_kind = "memory"
     path: Path | None = None
-    if persist and mode == "mock":
-        raw_path = str(environ.get("MOCK_DIARY_PATH", "")).strip()
-        path = Path(raw_path) if raw_path else DEFAULT_MOCK_PATH
-    client = PracticeClient(mode=mode, persist_path=path)
+    if mode == "mock":
+        store, store_kind, path = diary_store_from_env(environ, persist=persist)
+        if store_kind == "file" and path is None:
+            path = DEFAULT_MOCK_PATH
+    client = PracticeClient(
+        mode=mode,
+        persist_path=path if store is None else None,
+        store=store,
+        store_kind=store_kind if mode == "mock" else "none",
+    )
     if mode == "mock":
         client.load()
         if not client.slots:

@@ -214,31 +214,106 @@ function setCallStatus(message, visible = true) {
   el.classList.toggle("hidden", !visible);
 }
 
-async function callLeo() {
-  setCallStatus("Connecting to Leo…");
-  $("call-leo").classList.add("live");
+function livekitSdk() {
+  const sdk =
+    globalThis.LivekitClient ||
+    globalThis.LiveKitClient ||
+    globalThis.livekitClient;
+  if (!sdk || !sdk.Room) {
+    throw new Error("LiveKit browser SDK did not load. Refresh and try Call Ava again.");
+  }
+  return sdk;
+}
+
+function isAudioTrack(track) {
+  if (!track) return false;
+  const kind = String(track.kind || "").toLowerCase();
+  return kind === "audio";
+}
+
+function attachRemoteAudio(track) {
+  // Docs: https://docs.livekit.io/transport/media/subscribe/
+  if (!isAudioTrack(track)) return;
+  const mount = $("remote-audio");
+  const el = track.attach();
+  el.autoplay = true;
+  el.playsInline = true;
+  el.setAttribute("autoplay", "");
+  el.setAttribute("playsinline", "");
+  el.muted = false;
+  if (!el.isConnected) {
+    mount.appendChild(el);
+  }
+  const playAttempt = el.play();
+  if (playAttempt && typeof playAttempt.catch === "function") {
+    playAttempt.catch(() => {});
+  }
+}
+
+function attachExistingRemoteAudio(room) {
+  const participants = room.remoteParticipants;
+  if (!participants || typeof participants.forEach !== "function") return;
+  participants.forEach((participant) => {
+    const pubs = participant.trackPublications || participant.tracks;
+    if (!pubs || typeof pubs.forEach !== "function") return;
+    pubs.forEach((publication) => {
+      if (publication && publication.track) {
+        attachRemoteAudio(publication.track);
+      }
+    });
+  });
+}
+
+async function unlockAudioPlayback() {
   try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((track) => track.stop());
+  } catch {
+    // Permission prompt may appear again when the microphone is published.
+  }
+}
+
+async function callAva() {
+  setCallStatus("Connecting to Ava…");
+  $("call-ava").classList.add("live");
+  try {
+    const { Room, RoomEvent } = livekitSdk();
+    await unlockAudioPlayback();
     const token = await api("/api/token", {
       method: "POST",
       body: JSON.stringify({ branch_id: state.branchId }),
     });
-    const Room = window.LivekitClient.Room;
-    const RoomEvent = window.LivekitClient.RoomEvent;
     const room = new Room();
     room.on(RoomEvent.TrackSubscribed, (track) => {
-      if (track.kind === "audio") {
-        $("remote-audio").appendChild(track.attach());
+      attachRemoteAudio(track);
+    });
+    room.on(RoomEvent.TrackUnsubscribed, (track) => {
+      if (!isAudioTrack(track) || typeof track.detach !== "function") return;
+      for (const el of track.detach()) {
+        el.remove();
       }
     });
+    if (RoomEvent.AudioPlaybackStatusChanged) {
+      room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+        if (room.canPlaybackAudio === false) {
+          room.startAudio().catch(() => {});
+        }
+      });
+    }
     room.on(RoomEvent.Disconnected, () => hangUp(false));
     await room.connect(token.url, token.token);
-    await room.startAudio();
+    if (typeof room.startAudio === "function") {
+      await room.startAudio();
+    }
+    attachExistingRemoteAudio(room);
     await room.localParticipant.setMicrophoneEnabled(true);
     state.room = room;
     $("hang-up").classList.remove("hidden");
-    setCallStatus(`Connected to Leo at ${currentBranch().trading_name}. Speak normally.`);
+    setCallStatus(
+      `Connected to Ava at ${currentBranch().trading_name}. Speak normally.`
+    );
   } catch (error) {
-    $("call-leo").classList.remove("live");
+    $("call-ava").classList.remove("live");
     setCallStatus(error.message || "Could not connect. Is the agent worker running?");
   }
 }
@@ -248,13 +323,13 @@ async function hangUp(disconnect = true) {
     await state.room.disconnect();
   }
   state.room = null;
-  $("call-leo").classList.remove("live");
+  $("call-ava").classList.remove("live");
   $("hang-up").classList.add("hidden");
   $("remote-audio").innerHTML = "";
   setCallStatus("Call ended.", true);
 }
 
-$("call-leo").addEventListener("click", callLeo);
+$("call-ava").addEventListener("click", callAva);
 $("hang-up").addEventListener("click", () => hangUp(true));
 $("diary-date").addEventListener("change", loadDiary);
 

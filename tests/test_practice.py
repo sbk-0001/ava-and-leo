@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from diary_store import DictDiaryStore, RedisDiaryStore, resolve_diary_store_kind
 from persona import BRANCHES, VERIFY
 from practice import (
     PracticeClient,
@@ -247,3 +248,78 @@ def test_practice_from_env_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     forced = practice_from_env(is_telephony=True, persist=False)
     assert forced.mode == "mock"
     reset_shared_practice()
+
+
+def test_two_clients_share_dict_diary() -> None:
+    bucket: dict = {}
+    store = DictDiaryStore(bucket)
+    first = PracticeClient(mode="mock", store=store, store_kind="memory")
+    seed_mock_diary(first, today=date(2026, 9, 14), days=3)
+    first.save()
+    second = PracticeClient(mode="mock", store=store, store_kind="memory")
+    second.load()
+    assert set(second.slots) == set(first.slots)
+
+
+@pytest.mark.asyncio
+async def test_redis_store_shares_bookings_across_clients() -> None:
+    kv: dict[str, str] = {}
+
+    def rpc(command: list[str]):
+        op = command[0]
+        if op == "SET":
+            kv[command[1]] = command[2]
+            return "OK"
+        if op == "GET":
+            return kv.get(command[1])
+        raise AssertionError(command)
+
+    store = RedisDiaryStore(url="https://example.upstash.io", token="t", rpc=rpc)
+    writer = PracticeClient(mode="mock", store=store, store_kind="redis")
+    writer.seed_patient(patient_id="p1", name="Alex Taylor", phone="0411111111")
+    writer.seed_slot(
+        slot_id="slot-am",
+        branch_id="shellharbour",
+        date="2026-09-21",
+        time="09:30",
+        clinician="Dr Mohit Tolani",
+    )
+    booked = await writer.book_appointment(
+        branch_id="shellharbour",
+        slot_id="slot-am",
+        patient_id="p1",
+        reason="check up",
+    )
+    assert booked["confirmed"] is True
+
+    reader = PracticeClient(mode="mock", store=store, store_kind="redis")
+    diary = await reader.list_diary(branch_id="shellharbour")
+    taken = next(slot for slot in diary["slots"] if slot["slot_id"] == "slot-am")
+    assert taken["taken"] is True
+
+
+def test_diary_store_kind_from_env() -> None:
+    assert (
+        resolve_diary_store_kind(
+            {
+                "UPSTASH_REDIS_REST_URL": "https://example.upstash.io",
+                "UPSTASH_REDIS_REST_TOKEN": "token",
+            }
+        )
+        == "redis"
+    )
+    assert resolve_diary_store_kind({"VERCEL": "1"}) == "memory"
+    assert resolve_diary_store_kind({}) == "file"
+    assert (
+        resolve_diary_store_kind(
+            {
+                "MOCK_DIARY_TABLE": "mock_diary",
+                "SUPABASE_URL": "https://example.supabase.co",
+                "SUPABASE_SERVICE_ROLE_KEY": "svc",
+            }
+        )
+        == "supabase"
+    )
+    assert (
+        resolve_diary_store_kind({"DIARY_STORE": "memory", "VERCEL": "1"}) == "memory"
+    )

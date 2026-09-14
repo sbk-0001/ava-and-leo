@@ -1,11 +1,18 @@
 """Clinic portal API uses the same mock PracticeClient as Leo."""
 
+import base64
+import json
 from datetime import date
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from portal import create_app
+from diary_store import DictDiaryStore
+from portal import COOKIE_NAME, create_app
 from practice import PracticeClient, seed_mock_diary
+
+STATIC_DIR = Path(__file__).resolve().parents[1] / "src" / "portal_static"
+STRATEGYBYTE_COLORS = ("#091736", "#FFC605", "#0061FF", "#FFEFD7")
 
 
 def _client() -> tuple[TestClient, PracticeClient]:
@@ -73,3 +80,155 @@ def test_portal_token_without_livekit_keys_is_explicit(monkeypatch) -> None:
     response = http.post("/api/token", json={"branch_id": "shellharbour"})
     assert response.status_code == 503
     assert "LIVEKIT" in response.json()["detail"]
+
+
+def _jwt_payload(token: str) -> dict:
+    payload = token.split(".")[1]
+    padded = payload + "=" * (-len(payload) % 4)
+    return json.loads(base64.urlsafe_b64decode(padded))
+
+
+def test_portal_token_dispatches_dental_realtime_receptionist(monkeypatch) -> None:
+    monkeypatch.setenv("LIVEKIT_URL", "wss://shellharbour-cqvf1jsj.livekit.cloud")
+    monkeypatch.setenv("LIVEKIT_API_KEY", "devkey")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "secretsecretsecretsecretsecret12")
+    http, _practice = _client()
+    response = http.post("/api/token", json={"branch_id": "dapto"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["url"] == "wss://shellharbour-cqvf1jsj.livekit.cloud"
+    claims = _jwt_payload(body["token"])
+    room_config = claims.get("roomConfig") or claims.get("room_config") or {}
+    agents = room_config.get("agents") or []
+    assert agents, claims
+    metadata_raw = agents[0].get("metadata") or ""
+    metadata = json.loads(metadata_raw)
+    assert metadata["persona"] == "leo"
+    assert metadata["branch"] == "dapto"
+    assert metadata["source"] == "portal"
+    agent_name = agents[0].get("agentName") or agents[0].get("agent_name")
+    assert agent_name == "ava-and-leo"
+
+
+def test_portal_static_is_strategybyte_branded() -> None:
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    css = (STATIC_DIR / "styles.css").read_text(encoding="utf-8")
+    branded = html + css
+    for color in STRATEGYBYTE_COLORS:
+        assert color in branded, f"missing Strategybyte color {color}"
+    assert "Strategybyte" in html
+    assert "Ava desk" in html
+    assert "Call Ava" in html
+    assert 'id="call-ava"' in html
+    assert "Call Leo" not in html
+
+
+def test_portal_js_plays_remote_audio_and_keeps_call_ava() -> None:
+    js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    assert "Call Ava" in html
+    assert "call-ava" in js
+    assert "LivekitClient" in js
+    assert "autoplay" in js
+    assert "playsInline" in js or "playsinline" in js
+    assert ".play(" in js
+    assert "remoteParticipants" in js
+    assert "startAudio" in js
+    assert "TrackSubscribed" in js
+
+
+def test_portal_http_serves_strategybyte_static() -> None:
+    http, _practice = _client()
+    page = http.get("/")
+    css = http.get("/static/styles.css")
+    js = http.get("/static/app.js")
+    assert page.status_code == 200
+    assert css.status_code == 200
+    assert js.status_code == 200
+    assert "Call Ava" in page.text
+    assert "Strategybyte" in page.text
+    assert "Ava desk" in page.text
+    for color in STRATEGYBYTE_COLORS:
+        assert color in css.text
+    assert "call-ava" in js.text
+    assert "remoteParticipants" in js.text
+
+
+def test_portal_requires_password_when_not_localhost() -> None:
+    practice = PracticeClient(mode="mock")
+    app = create_app(practice=practice, portal_password="")
+    http = TestClient(app)
+    denied = http.get("/api/branches", headers={"x-forwarded-for": "203.0.113.10"})
+    assert denied.status_code == 401
+    assert "PORTAL_PASSWORD" in denied.json()["detail"]
+
+    local = http.get("/api/config")
+    assert local.status_code == 200
+    assert local.json()["loopback"] is True
+
+
+def test_portal_login_cookie_is_secure_behind_proxy() -> None:
+    practice = PracticeClient(mode="mock")
+    app = create_app(practice=practice, portal_password="partner-demo")
+    http = TestClient(app)
+    response = http.post(
+        "/api/login",
+        json={"password": "partner-demo"},
+        headers={"x-forwarded-for": "203.0.113.10"},
+    )
+    assert response.status_code == 200
+    set_cookie = response.headers.get("set-cookie", "")
+    assert COOKIE_NAME in set_cookie
+    assert "HttpOnly" in set_cookie
+    assert "Secure" in set_cookie
+
+    http.cookies.set(COOKIE_NAME, response.cookies.get(COOKIE_NAME))
+    gated = http.get("/api/branches", headers={"x-forwarded-for": "203.0.113.10"})
+    assert gated.status_code == 200
+
+
+def test_two_portal_sessions_share_durable_diary() -> None:
+    bucket: dict = {}
+    store = DictDiaryStore(bucket)
+    practice_a = PracticeClient(mode="mock", store=store)
+    seed_mock_diary(practice_a, today=date(2026, 9, 14), days=3)
+    practice_a.save()
+
+    practice_b = PracticeClient(mode="mock", store=store)
+    practice_b.load()
+    app_a = create_app(practice=practice_a, require_auth=False)
+    app_b = create_app(practice=practice_b, require_auth=False)
+    staff = TestClient(app_a)
+    partner = TestClient(app_b)
+
+    diary = staff.get("/api/diary", params={"branch_id": "shellharbour"}).json()
+    slot = next(item for item in diary["slots"] if not item["taken"])
+    booked = staff.post(
+        "/api/bookings",
+        json={
+            "branch_id": "shellharbour",
+            "slot_id": slot["slot_id"],
+            "name": "Partner Demo",
+            "phone": "0412000999",
+            "reason": "check up",
+        },
+    )
+    assert booked.json()["confirmed"] is True
+
+    partner_diary = partner.get(
+        "/api/diary", params={"branch_id": "shellharbour"}
+    ).json()
+    taken = next(
+        item for item in partner_diary["slots"] if item["slot_id"] == slot["slot_id"]
+    )
+    assert taken["taken"] is True
+    names = [item["patient_name"] for item in partner_diary["bookings"]]
+    assert "Partner Demo" in names
+
+
+def test_health_reports_ava_desk() -> None:
+    http, _practice = _client()
+    body = http.get("/api/health").json()
+    assert body["ok"] == "true"
+    assert body["service"] == "ava-desk"
+    assert "diary_store" in body

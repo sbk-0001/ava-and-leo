@@ -158,13 +158,14 @@ def test_portal_requires_password_when_not_localhost() -> None:
     practice = PracticeClient(mode="mock")
     app = create_app(practice=practice, portal_password="")
     http = TestClient(app)
-    denied = http.get("/api/branches", headers={"x-forwarded-for": "203.0.113.10"})
+    forwarded = {"x-forwarded-for": "203.0.113.10"}
+    denied = http.get("/api/branches", headers=forwarded)
     assert denied.status_code == 401
     assert "PORTAL_PASSWORD" in denied.json()["detail"]
-
-    local = http.get("/api/config")
-    assert local.status_code == 200
-    assert local.json()["loopback"] is True
+    config = http.get("/api/config", headers=forwarded)
+    assert config.status_code == 200
+    assert config.json()["auth_required"] is True
+    assert config.json()["loopback"] is False
 
 
 def test_portal_login_cookie_is_secure_behind_proxy() -> None:

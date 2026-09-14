@@ -28,9 +28,14 @@ def test_vercel_fastapi_entrypoint_is_portal() -> None:
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert "src.main:app" in pyproject or "src/main.py" in pyproject
     requirements = (ROOT / "requirements-portal.txt").read_text(encoding="utf-8")
-    assert "fastapi" in requirements.lower()
-    assert "livekit-api" in requirements
-    assert "livekit-agents" not in requirements
+    dep_lines = [
+        line.strip()
+        for line in requirements.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    assert any(line.lower().startswith("fastapi") for line in dep_lines)
+    assert any(line.startswith("livekit-api") for line in dep_lines)
+    assert all("livekit-agents" not in line for line in dep_lines)
     main = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
     assert "from portal import app" in main
 

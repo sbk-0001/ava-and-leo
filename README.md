@@ -41,11 +41,12 @@ lk app env --write --destination .env.local
 
 ### Local clinic portal (agent + diary + Call Leo)
 
-One command starts the mock diary, the Leo worker, and the staff portal:
+One command starts the mock diary, the Leo worker in **dev** mode, and the staff portal:
 
 ```bash
 # .env.local should include LIVEKIT_*, OPENAI_API_KEY
 # run_local.py defaults: AGENT_PERSONA=leo, PRACTICE_SOFTWARE=mock, LEO_REALTIME_VOICE=marin
+# The worker subcommand is `dev` (injected automatically — do not pass it yourself).
 uv run python src/run_local.py
 ```
 
@@ -126,7 +127,7 @@ On outbound, Leo waits for the callee to speak first. On inbound, Leo greets as 
 ## Tests
 
 ```bash
-uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_leo.py tests/test_portal.py -v
+uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_leo.py tests/test_portal.py tests/test_run_local.py -v
 uv run pytest            # includes Ava evals; needs LIVEKIT_* in CI
 ```
 

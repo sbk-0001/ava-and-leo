@@ -27,6 +27,9 @@ def test_instructions_file_is_verbatim() -> None:
     assert "You do not do date maths" in text
     assert "You do not confirm a booking" in text
     assert "TOOL RESULT BEFORE ANY FACT" in text
+    assert "BACKGROUND NOISE AND SIDE TALK" in text
+    assert "Ignore non-English scraps" in text
+    assert "corrected name" in text.lower()
 
 
 def test_branch_name_is_interpolated_not_rewritten() -> None:

@@ -39,6 +39,7 @@ from caller_store import (
 )
 from dead_air import DeadAirMonitor
 from desk_events import schedule_desk_publish, transcript_packet
+from filler_bank import get_filler_bank
 from filler_player import FillerPlayer
 from persona import CANONICAL_PERSONAS, canonical_persona, get_branch, resolve_persona
 from realtime_hygiene import (
@@ -103,7 +104,7 @@ def _get_supabase_create_client():
 
 
 def prewarm(proc: JobProcess) -> None:
-    """Import supabase at process start so call-log shutdown does not block.
+    """Import supabase and load the filler bank once per process.
 
     Docs: https://docs.livekit.io/agents/server/options/#prewarm-function
     """
@@ -116,6 +117,14 @@ def prewarm(proc: JobProcess) -> None:
         logger.info("prewarmed supabase client factory")
     except Exception:
         logger.exception("supabase prewarm failed")
+    try:
+        from filler_bank import get_filler_bank
+
+        bank = get_filler_bank()
+        proc.userdata["filler_bank"] = bank
+        logger.info("prewarmed filler bank clips=%s", len(bank.by_text))
+    except Exception:
+        logger.exception("filler bank prewarm failed")
 
 
 def _require_env(names: tuple[str, ...]) -> None:
@@ -658,7 +667,7 @@ async def my_agent(ctx: JobContext):
                         dentist = str(last_booking.get("clinician") or "").strip()
                         if dentist:
                             call_state.usual_dentist = dentist
-        filler_player = FillerPlayer(ambient=ambient)
+        filler_player = FillerPlayer(get_filler_bank(), ambient=ambient)
         dead_air = DeadAirMonitor(
             call_id=str(ctx.job.id),
             branch=call_state.branch,
@@ -683,10 +692,22 @@ async def my_agent(ctx: JobContext):
         def _on_speech_created(*_args: Any, **_kwargs: Any) -> None:
             filler_player.notify_model_audio()
 
+        def _on_agent_state(ev: Any) -> None:
+            state_name = str(getattr(ev, "new_state", "") or "").lower()
+            if "speaking" in state_name:
+                filler_player.notify_model_audio()
+            else:
+                # thinking / listening / idle — mouth is free for tool fillers.
+                filler_player.notify_model_audio_ended()
+
         try:
             session.on("speech_created")(_on_speech_created)
         except Exception:
             logger.exception("could not attach filler duck listener")
+        try:
+            session.on("agent_state_changed")(_on_agent_state)
+        except Exception:
+            logger.exception("could not attach agent state duck listener")
         orig_say = session.say
 
         def _gated_say(text: Any, *args: Any, **kwargs: Any) -> Any:
@@ -695,7 +716,13 @@ async def my_agent(ctx: JobContext):
             return orig_say(text, *args, **kwargs)
 
         session.say = _gated_say  # type: ignore[method-assign]
-        attach_backchannels(session, call_state)
+        attach_backchannels(
+            session,
+            call_state,
+            speaker=filler_player,
+            filler_player=filler_player,
+            enabled=False,
+        )
         _register_desk_feed(session, ctx.room)
     else:
         _require_env(GENERIC_ENV_VARS)

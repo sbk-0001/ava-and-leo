@@ -1,9 +1,9 @@
-"""Play pre-rendered filler PCM. No model, no TTS, no session.say.
+"""Play pre-rendered filler PCM. Exactly one audible speech path at a time.
 
-Live path mixes into the ambient BackgroundAudioPlayer (same heard mix as
-the office bed). If model audio starts while a filler plays, duck over 80ms
-— never hard-cut. First audio is a buffer read, so stage-1 can precede the
-tool network call.
+If BackgroundAudioPlayer live play succeeds, do not also mix onto the
+Realtime session. Dual-route play is two mouths — a different marin TTS
+take overlapping live Ava. When the Realtime model starts, duck/stop the
+filler within 80ms and never start another filler under it.
 
 Docs: https://docs.livekit.io/agents/multimodality/audio/background-audio.md
       https://docs.livekit.io/agents/multimodality/audio/customization.md
@@ -12,6 +12,7 @@ Docs: https://docs.livekit.io/agents/multimodality/audio/background-audio.md
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import logging
 import time
@@ -85,29 +86,57 @@ class FillerPlayer:
         self.played_pcm: list[bytes] = []
         self.gains: list[float] = []
         self._model_audio_at: float | None = None
+        self._model_speaking = False
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._live_handle: Any | None = None
+        self.route: str | None = None
+        self.live_plays = 0
+        self.mix_plays = 0
+        self.skipped: list[str] = []
 
     def _bank(self) -> FillerBank:
         return self.bank or get_filler_bank()
 
+    @property
+    def model_speaking(self) -> bool:
+        return self._model_speaking
+
+    @property
+    def is_playing(self) -> bool:
+        if self._live_handle is not None:
+            return True
+        return self._task is not None and not self._task.done()
+
     def notify_model_audio(self) -> None:
         """Model speech started. Duck any in-flight filler over ~80ms."""
+        self._model_speaking = True
         if self._model_audio_at is None:
             self._model_audio_at = self.clock()
-        handle = self._live_handle
-        if handle is not None:
-            stopper = getattr(handle, "stop", None)
-            if callable(stopper):
-                try:
-                    stopper()
-                except Exception:
-                    logger.exception("filler duck stop failed")
+        self._stop.set()
+        self._stop_live_handle()
+
+    def notify_model_audio_ended(self) -> None:
+        """Realtime mouth is free. Next filler may play (never under live Ava)."""
+        self._model_speaking = False
+        self._model_audio_at = None
 
     def reset_model_audio(self) -> None:
         self._model_audio_at = None
+        self._model_speaking = False
         self._stop = asyncio.Event()
+
+    def _stop_live_handle(self) -> None:
+        handle = self._live_handle
+        self._live_handle = None
+        if handle is None:
+            return
+        stopper = getattr(handle, "stop", None)
+        if callable(stopper):
+            try:
+                stopper()
+            except Exception:
+                logger.exception("filler duck stop failed")
 
     def _note_audio(self) -> None:
         if self.last_first_audio_ts is None:
@@ -120,6 +149,11 @@ class FillerPlayer:
         clip = self._bank().get(text)
         self.last_text = text
         self.started_at = self.clock()
+        if self._model_speaking:
+            self.route = "skipped_model_speaking"
+            self.skipped.append(text)
+            logger.info("skip filler; realtime model is speaking")
+            return clip
         self.last_first_audio_ts = None
         self._model_audio_at = None
         self._stop = asyncio.Event()
@@ -139,11 +173,21 @@ class FillerPlayer:
     async def _start_playout(self, clip: FillerClip) -> None:
         if self._task is not None and not self._task.done():
             self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._task
+        self._stop_live_handle()
         live = await self._try_live_play(clip)
-        # Always mix PCM onto the session output as well so tool waits are
-        # never silent if BackgroundAudioPlayer isn't started yet.
+        if live:
+            # Exactly one path: live BackgroundAudioPlayer succeeded.
+            # Do not also mix onto the Realtime session — that is two voices.
+            self.route = "live"
+            self.live_plays += 1
+            self._task = None
+            return
+        self.route = "mix"
+        self.mix_plays += 1
         self._task = asyncio.create_task(
-            self._mix_playout(clip, skip_capture=live),
+            self._mix_playout(clip, skip_capture=False),
             name="ava-filler-playout",
         )
         await asyncio.sleep(0)

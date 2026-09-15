@@ -159,7 +159,20 @@ def wav_bytes_to_pcm(blob: bytes, *, sample_rate: int = SAMPLE_RATE) -> bytes:
 def clip_is_synthetic_placeholder(
     text: str, pcm: bytes, *, sample_rate: int = SAMPLE_RATE
 ) -> bool:
-    return pcm == synthesize_pcm(text, sample_rate=sample_rate)
+    """Compare against a cached synthetic hash. Never call on the play hot path."""
+    return sha256_bytes(pcm) == _synthetic_pcm_hash(text, sample_rate)
+
+
+_SYNTHETIC_HASH: dict[tuple[str, int], str] = {}
+
+
+def _synthetic_pcm_hash(text: str, sample_rate: int) -> str:
+    key = (text, sample_rate)
+    cached = _SYNTHETIC_HASH.get(key)
+    if cached is None:
+        cached = sha256_bytes(synthesize_pcm(text, sample_rate=sample_rate))
+        _SYNTHETIC_HASH[key] = cached
+    return cached
 
 
 def synthesize_pcm(text: str, *, sample_rate: int = SAMPLE_RATE) -> bytes:
@@ -316,7 +329,11 @@ def assert_filler_bank(
             if duration < 0.2:
                 problems.append(f"clip too short {rel}")
                 continue
-            if must_real and clip_is_synthetic_placeholder(text, pcm, sample_rate=rate):
+            if (
+                must_real
+                and source != REAL_TTS_SOURCE
+                and clip_is_synthetic_placeholder(text, pcm, sample_rate=rate)
+            ):
                 problems.append(f"synthetic-placeholder pcm {rel}")
                 continue
             clips.append(
@@ -375,10 +392,12 @@ class FillerBank:
 _BANK: FillerBank | None = None
 
 
-def get_filler_bank(*, root: Path | None = None) -> FillerBank:
+def get_filler_bank(*, root: Path | None = None, reload: bool = False) -> FillerBank:
+    """Load once per process. Never re-assert or synthesize_pcm on play()."""
     global _BANK
-    if _BANK is None or root is not None:
-        _BANK = FillerBank.load(root=root)
+    if _BANK is not None and not reload:
+        return _BANK
+    _BANK = FillerBank.load(root=root)
     return _BANK
 
 

@@ -27,6 +27,7 @@ from grounding import (
 )
 from persona import BRANCHES, DEFAULT_BRANCH_ID, get_branch
 from phrase_pools import ACKS, BARGE_IN_RESUME, CLOSINGS, OPENINGS, pick_from_pool
+from turn_filter import extract_name_correction
 
 MAX_ASKS = 3
 MAX_DOB_ATTEMPTS = 2
@@ -238,6 +239,18 @@ def format_sydney_date(day: date) -> str:
     return f"{day.strftime('%A')} the {_ordinal(day.day)} of {day.strftime('%B %Y')}"
 
 
+def format_spoken_dob(value: str) -> str | None:
+    """Spoken DOB without weekday, e.g. the 15th of January 1990."""
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        day = date.fromisoformat(raw[:10])
+    except ValueError:
+        return raw
+    return f"the {_ordinal(day.day)} of {day.strftime('%B %Y')}"
+
+
 def named_dentists() -> tuple[str, ...]:
     names: list[str] = []
     seen: set[str] = set()
@@ -353,6 +366,13 @@ class CallState:
     last_appointment_private: dict[str, Any] | None = None
     pms_record: dict[str, Any] | None = None
     pending_grounding_note: str | None = None
+    name_corrected: bool = False
+    verified_dob: str | None = None
+    verified_dob_spoken: str | None = None
+    active_goal: str | None = None
+    goal_kind: str | None = None
+    junk_turns: int = 0
+    book_confirm_kicked_at: float | None = None
 
     def __post_init__(self) -> None:
         live = datetime.now(SYDNEY)
@@ -469,6 +489,8 @@ class CallState:
         if key in {"branch"}:
             return self.branch
         if key in {"dob", "date_of_birth"}:
+            if self.dob_verified and self.verified_dob:
+                return self.verified_dob
             return "verified" if self.dob_verified else None
         return None
 
@@ -516,28 +538,50 @@ class CallState:
             if self.dob_verified
             else "unverified — do not confirm or deny"
         )
+        dob_line = "hidden"
+        dob_rule = "Never disclose a date of birth. Never volunteer DOB unprompted."
+        if self.dob_verified and self.verified_dob:
+            spoken = self.verified_dob_spoken or format_spoken_dob(self.verified_dob)
+            dob_line = f"{spoken} (ISO {self.verified_dob})"
+            dob_rule = (
+                "If they ask for the DOB they just verified / on file for "
+                "themselves, read verified_dob back once. Never volunteer it "
+                "unprompted."
+            )
         return (
             "KNOWN FACTS (already collected — never ask again):\n"
             f"- first_name: {self.caller_first_name or 'unknown'}\n"
             f"- caller_name: {name}\n"
+            f"- name_corrected: {self.name_corrected}\n"
             f"- caller_mobile: {mobile}\n"
             f"- known_caller: {self.known_caller}\n"
             f"- ani: {self.ani or 'none'}\n"
             f"- dob_verified: {self.dob_verified}\n"
+            f"- verified_dob: {dob_line}\n"
             f"- dob_attempts: {self.dob_attempts}/{MAX_DOB_ATTEMPTS}\n"
             f"- is_existing_patient: {patient_status}\n"
             f"- preferred_branch: {self.preferred_branch or self.branch}\n"
             f"- usual_dentist: {dentist}\n"
             f"- last_appointment: {last_appt}\n"
+            f"- active_goal: {self.active_goal or 'none'}\n"
+            f"- goal_kind: {self.goal_kind or 'none'}\n"
+            "- Soft ANI greet name is only a guess until name_corrected is true. "
+            "If name_corrected, always use caller_name — never the store greet.\n"
             "- If caller_mobile is set: do not ask for their number. "
             "You may light-confirm 'Is this still the best number for ya?'\n"
             "- New booking: no DOB required. Discuss/move/cancel existing: DOB required.\n"
             "- Do not volunteer existing appointment, dentist, or treatment detail "
             "until dob_verified is true.\n"
+            f"- {dob_rule}\n"
             "- First failed DOB: they may volunteer another date — call "
             "verify_date_of_birth once more. Do not say it was wrong.\n"
             "- Second failed DOB: offer a callback. Do not mention date of birth. "
-            "Do not confirm or deny a record."
+            "Do not confirm or deny a record.\n"
+            "- Ignore background chatter, non-English scraps, and mm/mhm/yeah "
+            "while a tool is in flight. Only act on clear booking, cancel, "
+            "reschedule, or identity intent. Side noise must not clear active_goal.\n"
+            "- After a tool returns, resume active_goal. Never wander into small "
+            "talk about the store name."
         )
 
     @property
@@ -546,6 +590,63 @@ class CallState:
             return None
         token = self.caller_name.strip().split()[0]
         return token or None
+
+    def correct_caller_name(self, name: str | None) -> dict[str, Any]:
+        """In-call name correction wins over ANI greet and the caller store."""
+        cleaned = re.sub(r"\s+", " ", (name or "").strip())
+        if not cleaned:
+            return {"ok": False, "reason": "empty_name"}
+        self.caller_name = cleaned
+        self.name_corrected = True
+        return {
+            "ok": True,
+            "name": cleaned,
+            "first_name": self.caller_first_name,
+            "name_corrected": True,
+            "note": (
+                f"Use {cleaned} from now on. The ANI greet name is stale. "
+                "KnownFacts and this booking must use this name."
+            ),
+        }
+
+    def lock_goal(
+        self,
+        kind: str,
+        summary: str,
+        *,
+        replace: bool = True,
+    ) -> None:
+        if not kind or not summary:
+            return
+        if self.goal_kind and not replace:
+            return
+        if self.goal_kind == "cancel" and kind == "book":
+            self.goal_kind = "cancel_then_book"
+            self.active_goal = f"{self.active_goal}; then {summary}"
+            return
+        self.goal_kind = kind
+        self.active_goal = summary
+
+    def dob_readback(self) -> dict[str, Any]:
+        if not self.dob_verified or not self.verified_dob:
+            return {
+                "ok": False,
+                "reason": "not_verified",
+                "note": (
+                    "Do not read back or disclose a date of birth. "
+                    "Identity is not verified on this call."
+                ),
+            }
+        spoken = self.verified_dob_spoken or format_spoken_dob(self.verified_dob)
+        return {
+            "ok": True,
+            "date_of_birth": self.verified_dob,
+            "spoken": spoken,
+            "note": (
+                "They asked for their own verified date of birth. "
+                "Read it back once. Do not volunteer it again."
+            ),
+        }
 
     def may_disclose_existing(self) -> bool:
         return self.dob_verified and not self.dob_failed
@@ -648,6 +749,8 @@ class CallState:
     ) -> dict[str, Any]:
         self.dob_verified = True
         self.dob_failed = False
+        self.verified_dob = stored_dob
+        self.verified_dob_spoken = format_spoken_dob(stored_dob)
         if record.get("is_existing_patient"):
             self.is_existing_patient = True
         if patient is not None and stored_dob:
@@ -656,7 +759,12 @@ class CallState:
             "ok": True,
             "verified": True,
             "stored_dob": stored_dob,
-            "note": "Identity verified for this call.",
+            "date_of_birth": stored_dob,
+            "spoken": self.verified_dob_spoken,
+            "note": (
+                "Identity verified for this call. If they ask for this date "
+                "of birth, you may read it back. Do not volunteer it."
+            ),
         }
 
     def may_confirm_booking(self) -> bool:
@@ -785,6 +893,28 @@ class CallState:
         """Code-side flow: suburb offers, urgency, bot asks. Never a branch menu."""
         if not text:
             return
+        corrected = extract_name_correction(text)
+        if corrected:
+            self.correct_caller_name(corrected)
+        lowered_goal = text.lower()
+        if any(word in lowered_goal for word in ("cancel", "cancellation")):
+            self.lock_goal("cancel", "Cancel the caller's existing appointment")
+        if any(
+            word in lowered_goal
+            for word in ("reschedule", "move my appointment", "change my appointment")
+        ):
+            self.lock_goal("reschedule", "Reschedule the existing appointment")
+        if any(
+            word in lowered_goal
+            for word in (
+                "book",
+                "check-up",
+                "checkup",
+                "new appointment",
+                "make an appointment",
+            )
+        ):
+            self.lock_goal("book", "Book a new appointment")
         urgency = classify_urgency(text)
         if urgency == "emergency_000":
             self.urgency_level = "emergency_000"

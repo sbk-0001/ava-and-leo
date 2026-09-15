@@ -42,11 +42,11 @@ def assert_sip_host(env: Mapping[str, str] | None = None) -> str:
 
 def assert_filler_audio_bank(env: Mapping[str, str] | None = None) -> None:
     """Boot-fatal if the pre-rendered filler bank is missing or a pool is short."""
-    from filler_bank import assert_filler_bank, require_real_filler_bank
+    from filler_bank import get_filler_bank
 
-    assert_filler_bank(
-        require_real=require_real_filler_bank(dict(env) if env else None)
-    )
+    del env
+    # Load once. Play path must never re-run synthesize_pcm / assert.
+    get_filler_bank()
 
 
 def assert_live_openai_key(env: Mapping[str, str] | None = None) -> None:

@@ -111,6 +111,7 @@ class CachedBookingProvider:
             appointment_type="any",
             date_range=f"{date_from}/{date_to}",
             clinician=None,
+            limit=None,
         )
         if not result.get("ok"):
             logger.warning(
@@ -161,6 +162,7 @@ class CachedBookingProvider:
         appointment_type: str,
         date_range: str,
         clinician: str | None = None,
+        limit: int | None = 12,
     ) -> dict[str, Any]:
         start, end = parse_date_range(date_range, today=self.today_fn())
         window = self._windows.get(branch)
@@ -181,7 +183,7 @@ class CachedBookingProvider:
                 "appointment_type": appointment_type,
                 "date_from": start,
                 "date_to": end,
-                "slots": slots[:12],
+                "slots": slots if limit is None else slots[:limit],
             }
             if clinician:
                 payload["clinician"] = clinician
@@ -205,6 +207,7 @@ class CachedBookingProvider:
             appointment_type=appointment_type,
             date_range=date_range,
             clinician=clinician,
+            limit=limit,
         )
         payload = dict(result)
         payload["cached"] = False

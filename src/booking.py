@@ -37,6 +37,7 @@ class BookingProvider(Protocol):
         appointment_type: str,
         date_range: str,
         clinician: str | None = None,
+        limit: int | None = 12,
     ) -> dict[str, Any]: ...
 
     async def book_appointment(
@@ -230,6 +231,7 @@ class MemoryBookingProvider:
         appointment_type: str,
         date_range: str,
         clinician: str | None = None,
+        limit: int | None = 12,
     ) -> dict[str, Any]:
         if self.client.mode == "disconnected":
             return self.client._unavailable("check_availability")
@@ -239,13 +241,15 @@ class MemoryBookingProvider:
         )
         open_slots = [slot for slot in diary.get("slots", []) if not slot.get("taken")]
         filtered = filter_slots_by_clinician(open_slots, clinician)
+        if limit is not None:
+            filtered = filtered[:limit]
         payload: dict[str, Any] = {
             "ok": True,
             "branch_id": get_branch(branch).id,
             "appointment_type": appointment_type,
             "date_from": start,
             "date_to": end,
-            "slots": filtered[:12],
+            "slots": filtered,
         }
         if clinician:
             payload["clinician"] = clinician
@@ -427,6 +431,7 @@ class Zavy360BookingProvider:
         appointment_type: str,
         date_range: str,
         clinician: str | None = None,
+        limit: int | None = 12,
     ) -> dict[str, Any]:
         start, end = parse_date_range(date_range)
         params: dict[str, Any] = {
@@ -437,11 +442,16 @@ class Zavy360BookingProvider:
         }
         if clinician:
             params["clinician"] = clinician
-        return await self._request(
+        result = await self._request(
             "GET",
             "/appointments/availability",
             params=params,
         )
+        slots = result.get("slots")
+        if limit is not None and isinstance(slots, list):
+            result = dict(result)
+            result["slots"] = slots[:limit]
+        return result
 
     async def book_appointment(
         self,

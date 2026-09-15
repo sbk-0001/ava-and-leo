@@ -224,7 +224,9 @@ async def test_memory_provider_filters_clinician() -> None:
     assert mohit["ok"] is True
     assert mohit["slots"]
     assert all("mohit" in (s.get("clinician") or "").lower() for s in mohit["slots"])
-    assert len(mohit["slots"]) < len(all_slots["slots"])
+    names = {(s.get("clinician") or "") for s in all_slots["slots"]}
+    assert len(names) > 1
+    assert not all("mohit" in name.lower() for name in names)
     missing = await provider.check_availability(
         branch="shellharbour",
         appointment_type="root canal",

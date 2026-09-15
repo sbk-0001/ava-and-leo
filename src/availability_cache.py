@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from booking import BookingProvider, parse_date_range
+from booking import BookingProvider, filter_slots_by_clinician, parse_date_range
 from persona import BRANCHES
 
 logger = logging.getLogger("ava.cache")
@@ -110,6 +110,7 @@ class CachedBookingProvider:
             branch=branch,
             appointment_type="any",
             date_range=f"{date_from}/{date_to}",
+            clinician=None,
         )
         if not result.get("ok"):
             logger.warning(
@@ -159,6 +160,7 @@ class CachedBookingProvider:
         branch: str,
         appointment_type: str,
         date_range: str,
+        clinician: str | None = None,
     ) -> dict[str, Any]:
         start, end = parse_date_range(date_range, today=self.today_fn())
         window = self._windows.get(branch)
@@ -167,8 +169,10 @@ class CachedBookingProvider:
             window = self._windows.get(branch)
         if window is not None and window.covers(start, end):
             self.cache_hits += 1
-            slots = window.slots_in_range(start, end)
-            return {
+            slots = filter_slots_by_clinician(
+                window.slots_in_range(start, end), clinician
+            )
+            payload: dict[str, Any] = {
                 "ok": True,
                 "cached": True,
                 "cache_age_s": round(window.age_s(self.clock()), 3),
@@ -179,12 +183,28 @@ class CachedBookingProvider:
                 "date_to": end,
                 "slots": slots[:12],
             }
+            if clinician:
+                payload["clinician"] = clinician
+            if (
+                clinician
+                and not slots
+                and any(
+                    str(slot.get("clinician") or "").strip()
+                    for slot in window.slots_in_range(start, end)
+                )
+            ):
+                payload["note"] = (
+                    "No slots for that dentist in this range. Do not invent a time. "
+                    "Offer another dentist or another day."
+                )
+            return payload
 
         self.live_checks += 1
         result = await self.inner.check_availability(
             branch=branch,
             appointment_type=appointment_type,
             date_range=date_range,
+            clinician=clinician,
         )
         payload = dict(result)
         payload["cached"] = False

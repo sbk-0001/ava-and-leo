@@ -9,6 +9,7 @@ import pytest
 
 from call_state import CallState
 from filler_ladder import (
+    FAST_PATH_S,
     JITTER_MS,
     STAGE_OFFSETS_MS,
     FakeClock,
@@ -199,3 +200,41 @@ async def test_pool_does_not_repeat_within_a_call() -> None:
     # Wrap is allowed only after the pool is exhausted.
     await ladder.dispatch(fast)
     assert speaker.spoken[0] in STAGE_1
+
+
+@pytest.mark.asyncio
+async def test_cached_fast_path_cancels_after_stage_1() -> None:
+    """Cached / sub-300ms results must not keep scrolling through later stages."""
+    speaker = FakeSpeaker()
+    state = CallState(branch="shellharbour", phrase_rng=ZeroJitter(0))
+    ladder = FillerLadder(
+        state,
+        speaker=speaker,
+        booking=CountingBooking(),
+        rng=ZeroJitter(1),
+    )
+
+    async def cached_tool():
+        await asyncio.sleep(0.05)
+        return {
+            "ok": True,
+            "cached": True,
+            "slots": [
+                {
+                    "slot_id": "s1",
+                    "date": "2026-09-22",
+                    "time": "10:00",
+                    "clinician": "Dr Mohit Tolani",
+                }
+            ],
+        }
+
+    t0 = asyncio.get_event_loop().time()
+    result, trace = await ladder.dispatch(cached_tool)
+    elapsed = asyncio.get_event_loop().time() - t0
+    assert result["cached"] is True
+    assert FAST_PATH_S == 0.3
+    assert trace.stages_spoken == [1]
+    assert trace.fast_path is True
+    assert elapsed < 0.5
+    assert 2 not in trace.stages_spoken

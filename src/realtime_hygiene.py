@@ -14,12 +14,14 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from livekit.agents.llm import ChatContext
 
 from call_state import CallState
+from phrase_pools import STAGE_2, STAGE_3
 
 logger = logging.getLogger("ava.realtime")
 
@@ -138,11 +140,35 @@ def is_rate_limit_error(error: object) -> bool:
     return any(needle in text for needle in _RATE_LIMIT_NEEDLES)
 
 
-def rate_limit_backoff_s(attempt: int) -> float:
-    """1s, 2s, 4s, … capped at 8s."""
+_RETRY_AFTER_RE = re.compile(
+    r"try again in\s+(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds)?",
+    re.IGNORECASE,
+)
+
+
+def parse_retry_after_s(error: object) -> float | None:
+    """Read OpenAI's 'Please try again in 6.42s' hint from a TPM error."""
+    if error is None:
+        return None
+    chunks = [str(error)]
+    for attr in ("code", "message", "type", "body"):
+        value = getattr(error, attr, None)
+        if value:
+            chunks.append(str(value))
+    match = _RETRY_AFTER_RE.search(" ".join(chunks))
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def rate_limit_backoff_s(attempt: int, retry_after_s: float | None = None) -> float:
+    """1s, 2s, 4s, … capped at 8s, never shorter than the API's retry-after."""
     if attempt < 1:
         attempt = 1
-    return float(min(8.0, 1.0 * (2 ** (attempt - 1))))
+    exponential = float(min(8.0, 1.0 * (2 ** (attempt - 1))))
+    if retry_after_s is None:
+        return exponential
+    return float(max(exponential, retry_after_s))
 
 
 class RateLimitRecovery:
@@ -156,23 +182,69 @@ class RateLimitRecovery:
     def in_flight(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    def schedule(self, session: Any, *, trim: TrimFn | None = None) -> None:
+    def schedule(
+        self,
+        session: Any,
+        *,
+        trim: TrimFn | None = None,
+        error: object | None = None,
+        state: CallState | None = None,
+    ) -> None:
         if self.in_flight():
             logger.info("rate-limit recovery already in flight; not stacking")
             return
         self._task = asyncio.create_task(
-            self.recover(session, trim=trim),
+            self.recover(session, trim=trim, error=error, state=state),
             name="ava-rate-limit-recovery",
         )
 
-    async def recover(self, session: Any, *, trim: TrimFn | None = None) -> None:
+    def _cover_line(self, state: CallState | None) -> str:
+        pool = STAGE_2 if self.attempts <= 1 else STAGE_3
+        name = "stage_2" if self.attempts <= 1 else "stage_3"
+        if state is not None:
+            return state.pick_phrase(name, pool)
+        return pool[0]
+
+    async def _say(self, session: Any, text: str) -> None:
+        """Predetermined cover/offer via say() — generate_reply burns TPM."""
+        say = getattr(session, "say", None)
+        if callable(say):
+            try:
+                result = say(text, allow_interruptions=True)
+                if inspect.isawaitable(result):
+                    await result
+                return
+            except TypeError:
+                result = say(text)
+                if inspect.isawaitable(result):
+                    await result
+                return
+            except Exception:
+                logger.exception("rate-limit session.say failed; trying generate_reply")
+        await session.generate_reply(
+            instructions=(
+                "Cover the pause. Say exactly this and nothing else, "
+                f"in character: {text} Do not invent a diary result."
+            )
+        )
+
+    async def recover(
+        self,
+        session: Any,
+        *,
+        trim: TrimFn | None = None,
+        error: object | None = None,
+        state: CallState | None = None,
+    ) -> None:
         self.attempts += 1
-        delay = rate_limit_backoff_s(self.attempts)
+        retry_after = parse_retry_after_s(error)
+        delay = rate_limit_backoff_s(self.attempts, retry_after_s=retry_after)
         logger.warning(
             "openai realtime rate_limit_exceeded; trimming, covering, "
-            "retrying in %.1fs (attempt %s)",
+            "retrying in %.1fs (attempt %s retry_after=%s)",
             delay,
             self.attempts,
+            retry_after,
         )
         if trim is not None:
             try:
@@ -180,10 +252,19 @@ class RateLimitRecovery:
             except Exception:
                 logger.exception("rate-limit trim failed; CallState still intact")
         try:
-            await session.generate_reply(instructions=RATE_LIMIT_COVER_INSTRUCTIONS)
+            await self._say(session, self._cover_line(state))
         except Exception:
             logger.exception("rate-limit cover speech failed")
         await self._sleep(delay)
+        slots = list(getattr(state, "last_availability_slots", None) or [])
+        if slots:
+            from booking import spoken_two_slot_offer
+
+            try:
+                await self._say(session, spoken_two_slot_offer(slots))
+            except Exception:
+                logger.exception("rate-limit slot offer speech failed")
+            return
         try:
             await session.generate_reply(instructions=RATE_LIMIT_RETRY_INSTRUCTIONS)
         except Exception:

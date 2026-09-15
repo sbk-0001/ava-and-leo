@@ -110,6 +110,25 @@ async def test_cache_first_skips_live_and_marks_age() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cache_filters_clinician_without_live_roundtrip() -> None:
+    cache, inner = _cache()
+    await cache.prewarm(("shellharbour",))
+    checks_after_warm = inner.checks
+    result = await cache.check_availability(
+        branch="shellharbour",
+        appointment_type="root canal",
+        date_range="next week",
+        clinician="Dr Mohit",
+    )
+    assert inner.checks == checks_after_warm
+    assert result["cached"] is True
+    assert result["date_from"] == "2026-09-21"
+    assert result["date_to"] == "2026-09-27"
+    assert result["slots"]
+    assert all("mohit" in (s.get("clinician") or "").lower() for s in result["slots"])
+
+
+@pytest.mark.asyncio
 async def test_outside_window_hits_live() -> None:
     cache, inner = _cache()
     await cache.prewarm(("shellharbour",))

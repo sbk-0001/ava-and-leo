@@ -36,6 +36,7 @@ class BookingProvider(Protocol):
         branch: str,
         appointment_type: str,
         date_range: str,
+        clinician: str | None = None,
     ) -> dict[str, Any]: ...
 
     async def book_appointment(
@@ -71,14 +72,56 @@ class BookingProvider(Protocol):
     ) -> dict[str, Any]: ...
 
 
+_WEEKDAYS: dict[str, int] = {
+    "monday": 0,
+    "mon": 0,
+    "tuesday": 1,
+    "tue": 1,
+    "tues": 1,
+    "wednesday": 2,
+    "wed": 2,
+    "thursday": 3,
+    "thu": 3,
+    "thur": 3,
+    "thurs": 3,
+    "friday": 4,
+    "fri": 4,
+    "saturday": 5,
+    "sat": 5,
+    "sunday": 6,
+    "sun": 6,
+}
+_WEEKDAY_ALT = "|".join(sorted(_WEEKDAYS, key=len, reverse=True))
+_NEXT_WEEK_RE = re.compile(r"\bnext\s+week\b")
+_NEXT_WEEKDAY_RE = re.compile(rf"\bnext\s+({_WEEKDAY_ALT})\b")
+
+
+def _next_calendar_week(now: date) -> tuple[date, date]:
+    """Monday of the next calendar week through that Sunday (Sydney)."""
+    days_until_monday = (7 - now.weekday()) % 7
+    if days_until_monday == 0:
+        days_until_monday = 7
+    start = now + timedelta(days=days_until_monday)
+    return start, start + timedelta(days=6)
+
+
+def _next_weekday_after(now: date, weekday: int) -> date:
+    """That weekday strictly after today. If today is Tuesday, next Tuesday is +7."""
+    delta = (weekday - now.weekday()) % 7
+    if delta == 0:
+        delta = 7
+    return now + timedelta(days=delta)
+
+
 def parse_date_range(
     date_range: str,
     *,
     today: date | None = None,
 ) -> tuple[str, str]:
-    """Accept YYYY-MM-DD, YYYY-MM-DD/YYYY-MM-DD, 'today', 'this week'."""
+    """Accept ISO dates, 'today', 'this week', 'next week', 'next tuesday'."""
     now = today or datetime.now(SYDNEY).date()
-    raw = (date_range or "").strip().lower()
+    raw = re.sub(r"[^\w\s/-]+", " ", (date_range or "").lower())
+    raw = re.sub(r"\s+", " ", raw).strip()
     if not raw or raw in {"today", "asap", "soon"}:
         return now.isoformat(), now.isoformat()
     if raw in {"this week", "week"}:
@@ -87,12 +130,68 @@ def parse_date_range(
     if raw in {"tomorrow"}:
         nxt = now + timedelta(days=1)
         return nxt.isoformat(), nxt.isoformat()
+    if _NEXT_WEEK_RE.search(raw):
+        start, end = _next_calendar_week(now)
+        return start.isoformat(), end.isoformat()
+    weekday_match = _NEXT_WEEKDAY_RE.search(raw)
+    if weekday_match:
+        day = _next_weekday_after(now, _WEEKDAYS[weekday_match.group(1)])
+        return day.isoformat(), day.isoformat()
     if "/" in raw:
         start_s, end_s = raw.split("/", 1)
         return start_s.strip(), end_s.strip()
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
         return raw, raw
     return now.isoformat(), (now + timedelta(days=6)).isoformat()
+
+
+def _norm_clinician(value: str) -> str:
+    text = re.sub(r"\s+", " ", value).strip().lower()
+    return re.sub(r"^dr\.?\s+", "", text)
+
+
+def filter_slots_by_clinician(
+    slots: list[dict[str, Any]],
+    clinician: str | None,
+) -> list[dict[str, Any]]:
+    """Filter named diary slots. If none carry a clinician field, leave them as-is."""
+    wanted = (clinician or "").strip()
+    if not wanted:
+        return list(slots)
+    if not any(str(slot.get("clinician") or "").strip() for slot in slots):
+        return list(slots)
+    needle = _norm_clinician(wanted)
+    return [
+        slot
+        for slot in slots
+        if needle and needle in _norm_clinician(str(slot.get("clinician") or ""))
+    ]
+
+
+def spoken_two_slot_offer(slots: list[dict[str, Any]]) -> str:
+    """Speech-ready offer of the two best diary slots. Never invents times."""
+    best = list(slots)[:2]
+    if not best:
+        return "Yeah nah, nothing in that window — want me to try another day?"
+    parts: list[str] = []
+    for slot in best:
+        try:
+            day = date.fromisoformat(str(slot.get("date")))
+            weekday = day.strftime("%A")
+            day_n = day.day
+            when = f"{weekday} the {day_n}"
+        except (TypeError, ValueError):
+            when = str(slot.get("date") or "that day")
+        time_s = str(slot.get("time") or "").strip()
+        if time_s:
+            when = f"{when} at {time_s}"
+        name = str(slot.get("clinician") or "").strip()
+        if name:
+            when = f"{when} with {name}"
+        parts.append(when)
+    if len(parts) == 1:
+        return f"I've got {parts[0]} — that any good?"
+    return f"I've got {parts[0]}, or {parts[1]} — which suits?"
 
 
 def cancellation_fee_applies(
@@ -130,6 +229,7 @@ class MemoryBookingProvider:
         branch: str,
         appointment_type: str,
         date_range: str,
+        clinician: str | None = None,
     ) -> dict[str, Any]:
         if self.client.mode == "disconnected":
             return self.client._unavailable("check_availability")
@@ -138,14 +238,27 @@ class MemoryBookingProvider:
             branch_id=get_branch(branch).id, date_from=start, date_to=end
         )
         open_slots = [slot for slot in diary.get("slots", []) if not slot.get("taken")]
-        return {
+        filtered = filter_slots_by_clinician(open_slots, clinician)
+        payload: dict[str, Any] = {
             "ok": True,
             "branch_id": get_branch(branch).id,
             "appointment_type": appointment_type,
             "date_from": start,
             "date_to": end,
-            "slots": open_slots[:12],
+            "slots": filtered[:12],
         }
+        if clinician:
+            payload["clinician"] = clinician
+        if (
+            clinician
+            and not filtered
+            and any(str(slot.get("clinician") or "").strip() for slot in open_slots)
+        ):
+            payload["note"] = (
+                "No slots for that dentist in this range. Do not invent a time. "
+                "Offer another dentist or another day."
+            )
+        return payload
 
     async def book_appointment(
         self,
@@ -313,17 +426,21 @@ class Zavy360BookingProvider:
         branch: str,
         appointment_type: str,
         date_range: str,
+        clinician: str | None = None,
     ) -> dict[str, Any]:
         start, end = parse_date_range(date_range)
+        params: dict[str, Any] = {
+            "branch": get_branch(branch).id,
+            "appointment_type": appointment_type,
+            "date_from": start,
+            "date_to": end,
+        }
+        if clinician:
+            params["clinician"] = clinician
         return await self._request(
             "GET",
             "/appointments/availability",
-            params={
-                "branch": get_branch(branch).id,
-                "appointment_type": appointment_type,
-                "date_from": start,
-                "date_to": end,
-            },
+            params=params,
         )
 
     async def book_appointment(

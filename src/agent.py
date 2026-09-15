@@ -607,7 +607,9 @@ async def my_agent(ctx: JobContext):
         recoverable = getattr(err, "recoverable", None)
         if recoverable is False:
             err.recoverable = True
-        rate_limit.schedule(session, trim=_trim_on_rate_limit)
+        rate_limit.schedule(
+            session, trim=_trim_on_rate_limit, error=err, state=call_state
+        )
 
     @session.on("conversation_item_added")
     def _on_transcript(ev: ConversationItemAddedEvent) -> None:

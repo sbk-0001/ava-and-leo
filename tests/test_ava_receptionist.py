@@ -43,6 +43,10 @@ def test_required_tools_are_present() -> None:
     assert "_dispatch_with_ladder" in source
     assert "generate_reply" in source
     assert "first-audio-ts" in source
+    tool_src = inspect.getsource(AvaReceptionist.check_availability)
+    assert "next week" in tool_src
+    assert "next tuesday" in tool_src.lower() or "next <weekday>" in tool_src.lower()
+    assert "clinician" in tool_src
 
 
 def test_inbound_greeting_is_the_mapped_branch() -> None:

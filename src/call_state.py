@@ -139,9 +139,17 @@ class CallState:
     used_phrases: dict[str, list[str]] = field(default_factory=dict)
     stock_phrases_used: list[str] = field(default_factory=list)
     last_dispatch_trace: Any | None = None
+    last_availability_slots: list[dict[str, Any]] = field(default_factory=list)
     barge_in_pending: bool = False
     last_barge_in_resume: str | None = None
     phrase_rng: random.Random = field(default_factory=random.Random)
+
+    def remember_availability(self, result: Mapping[str, Any]) -> None:
+        """Keep the last diary result so a TPM recovery can offer times, not re-search."""
+        slots = list(result.get("slots") or []) if result.get("ok") else []
+        self.last_availability_slots = slots[:8]
+        if slots:
+            self.proposed_slot = slots[0].get("slot_id") or self.proposed_slot
 
     @property
     def branch_name(self) -> str:
@@ -298,6 +306,7 @@ class CallState:
             f"- intent: {self.intent or 'unknown'}\n"
             f"- appointment_type: {self.appointment_type or 'unknown'}\n"
             f"- proposed_slot: {self.proposed_slot or 'none'}\n"
+            f"- last_offer_slots: {self._offer_summary()}\n"
             f"- confirmed_slot: {self.confirmed_slot or 'none'}\n"
             f"- urgency_level: {self.urgency_level}\n"
             f"- escalation_flag: {self.escalation_flag}\n"
@@ -315,8 +324,23 @@ class CallState:
             "- If offered_branch is set: offer that clinic warmly. Never a menu.\n"
             "- If stop_asking_mobile: do not ask for the mobile again.\n"
             "- If barge_in_resume is set: start with that phrase. Never restart the "
-            "cut-off sentence."
+            "cut-off sentence.\n"
+            "- If last_offer_slots is set: offer those times. Do not search again "
+            "unless they ask for a different day or dentist."
         )
+
+    def _offer_summary(self) -> str:
+        if not self.last_availability_slots:
+            return "none"
+        parts: list[str] = []
+        for slot in self.last_availability_slots[:2]:
+            bits = [
+                str(slot.get("date") or ""),
+                str(slot.get("time") or ""),
+                str(slot.get("clinician") or ""),
+            ]
+            parts.append(" ".join(bit for bit in bits if bit).strip())
+        return "; ".join(parts) or "none"
 
     def as_dict(self) -> dict[str, Any]:
         return {

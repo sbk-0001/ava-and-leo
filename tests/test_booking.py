@@ -10,7 +10,9 @@ from booking import (
     TimeoutBookingProvider,
     Zavy360BookingProvider,
     cancellation_fee_applies,
+    filter_slots_by_clinician,
     parse_date_range,
+    spoken_two_slot_offer,
 )
 from practice import PracticeClient, seed_mock_diary
 
@@ -120,3 +122,115 @@ def test_parse_date_range() -> None:
     start, end = parse_date_range("this week", today=today)
     assert start == "2026-09-15"
     assert end == "2026-09-21"
+
+
+def test_parse_date_range_next_week_from_tuesday() -> None:
+    """Tue 15 Sep 2026: next week is Mon 21 - Sun 27, not this week."""
+    today = date(2026, 9, 15)
+    assert today.weekday() == 1  # Tuesday
+    assert parse_date_range("next week", today=today) == ("2026-09-21", "2026-09-27")
+    assert parse_date_range("Next Week", today=today) == ("2026-09-21", "2026-09-27")
+    assert parse_date_range("for next week please", today=today) == (
+        "2026-09-21",
+        "2026-09-27",
+    )
+
+
+def test_parse_date_range_next_weekday_strictly_after_today() -> None:
+    """If today is Tuesday, next Tuesday is +7, not today."""
+    today = date(2026, 9, 15)
+    assert parse_date_range("next tuesday", today=today) == ("2026-09-22", "2026-09-22")
+    assert parse_date_range("next Tuesday", today=today) == ("2026-09-22", "2026-09-22")
+    assert parse_date_range("next tue", today=today) == ("2026-09-22", "2026-09-22")
+    assert parse_date_range("the next tuesday", today=today) == (
+        "2026-09-22",
+        "2026-09-22",
+    )
+    assert parse_date_range("next wednesday", today=today) == (
+        "2026-09-16",
+        "2026-09-16",
+    )
+    assert parse_date_range("next monday", today=today) == ("2026-09-21", "2026-09-21")
+    assert parse_date_range("next friday", today=today) == ("2026-09-18", "2026-09-18")
+
+
+def test_parse_date_range_keeps_today_tomorrow_iso() -> None:
+    today = date(2026, 9, 15)
+    assert parse_date_range("today", today=today) == ("2026-09-15", "2026-09-15")
+    assert parse_date_range("tomorrow", today=today) == ("2026-09-16", "2026-09-16")
+    assert parse_date_range("2026-09-22/2026-09-24", today=today) == (
+        "2026-09-22",
+        "2026-09-24",
+    )
+    start, end = parse_date_range("sometime soon-ish", today=today)
+    assert start == "2026-09-15"
+    assert end == "2026-09-21"
+
+
+def test_filter_slots_by_clinician_matches_dr_mohit() -> None:
+    slots = [
+        {"slot_id": "a", "clinician": "Dr Mohit Tolani", "date": "2026-09-22"},
+        {"slot_id": "b", "clinician": "Dr Pat Pandey", "date": "2026-09-22"},
+        {"slot_id": "c", "clinician": "Dr Mohit Tolani", "date": "2026-09-23"},
+    ]
+    matched = filter_slots_by_clinician(slots, "Dr Mohit")
+    assert [s["slot_id"] for s in matched] == ["a", "c"]
+    assert filter_slots_by_clinician(slots, "mohit") == matched
+    none = filter_slots_by_clinician(slots, "Dr Nobody")
+    assert none == []
+
+
+def test_filter_slots_by_clinician_skips_when_field_missing() -> None:
+    slots = [{"slot_id": "a", "date": "2026-09-22", "time": "10:00"}]
+    assert filter_slots_by_clinician(slots, "Dr Mohit") == slots
+
+
+def test_spoken_two_slot_offer() -> None:
+    slots = [
+        {
+            "date": "2026-09-22",
+            "time": "10:00",
+            "clinician": "Dr Mohit Tolani",
+        },
+        {
+            "date": "2026-09-23",
+            "time": "14:30",
+            "clinician": "Dr Mohit Tolani",
+        },
+    ]
+    line = spoken_two_slot_offer(slots)
+    assert "Tuesday" in line
+    assert "22" in line
+    assert "10:00" in line or "ten" in line.lower()
+    assert "Wednesday" in line
+    assert "Mohit" in line
+    assert "which" in line.lower() or "or" in line.lower()
+
+
+@pytest.mark.asyncio
+async def test_memory_provider_filters_clinician() -> None:
+    provider = MemoryBookingProvider(_client())
+    all_slots = await provider.check_availability(
+        branch="shellharbour",
+        appointment_type="root canal",
+        date_range="2026-09-15/2026-09-21",
+    )
+    mohit = await provider.check_availability(
+        branch="shellharbour",
+        appointment_type="root canal",
+        date_range="2026-09-15/2026-09-21",
+        clinician="Dr Mohit",
+    )
+    assert mohit["ok"] is True
+    assert mohit["slots"]
+    assert all("mohit" in (s.get("clinician") or "").lower() for s in mohit["slots"])
+    assert len(mohit["slots"]) < len(all_slots["slots"])
+    missing = await provider.check_availability(
+        branch="shellharbour",
+        appointment_type="root canal",
+        date_range="2026-09-15/2026-09-21",
+        clinician="Dr Nobody",
+    )
+    assert missing["ok"] is True
+    assert missing["slots"] == []
+    assert "invent" in (missing.get("note") or "").lower()

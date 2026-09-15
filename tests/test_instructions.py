@@ -8,7 +8,7 @@ from persona import (
     load_session_instructions,
 )
 
-CALIBRATION_END = "That any good\n     to ya?"
+CALIBRATION_END = "someone's gotta balance out the drill."
 
 
 def test_instructions_file_is_verbatim() -> None:
@@ -23,6 +23,10 @@ def test_instructions_file_is_verbatim() -> None:
     assert "Morning, {{BRANCH_NAME}}, Ava speaking!" in text
     assert "how ya going" in text
     assert "what can I do for ya" in text
+    assert "You do not invent the diary" in text
+    assert "You do not do date maths" in text
+    assert "You do not confirm a booking" in text
+    assert "TOOL RESULT BEFORE ANY FACT" in text
 
 
 def test_branch_name_is_interpolated_not_rewritten() -> None:

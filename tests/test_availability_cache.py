@@ -279,3 +279,64 @@ async def test_real_slot_id_from_next_week_books() -> None:
     assert booked["confirmed"] is True
     assert booked["reverified"] is True
     assert inner.books == 1
+
+
+@pytest.mark.asyncio
+async def test_three_state_ok_partial_unknown() -> None:
+    cache, inner = _cache()
+    await cache.prewarm(("shellharbour",))
+    ok = await cache.check_availability(
+        branch="shellharbour",
+        appointment_type="check-up",
+        date_range="this week",
+    )
+    assert ok["status"] == "OK"
+    assert ok["coverage"]["complete"] is True
+    assert inner.checks >= 1
+
+    class _Fail:
+        name = "fail"
+
+        async def check_availability(self, **kwargs):
+            return {"ok": False, "reason": "timeout", "slots": []}
+
+        async def book_appointment(self, **kwargs):
+            raise AssertionError("not used")
+
+        async def reschedule_appointment(self, **kwargs):
+            raise AssertionError("not used")
+
+        async def cancel_appointment(self, **kwargs):
+            raise AssertionError("not used")
+
+        async def lookup_patient(self, **kwargs):
+            raise AssertionError("not used")
+
+        async def take_message(self, **kwargs):
+            raise AssertionError("not used")
+
+    from availability_cache import CachedBookingProvider
+
+    broken = CachedBookingProvider(
+        _Fail(),  # type: ignore[arg-type]
+        today_fn=lambda: date(2026, 9, 15),
+        clock=lambda: 1000.0,
+    )
+    unknown = await broken.check_availability(
+        branch="shellharbour",
+        appointment_type="check-up",
+        date_range="this week",
+    )
+    assert unknown["status"] == "UNKNOWN"
+    assert unknown["may_say_chockers"] is False
+
+    cache._windows["shellharbour"].date_to = "2026-09-18"
+    cache.inner = _Fail()  # type: ignore[assignment]
+    partial = await cache.check_availability(
+        branch="shellharbour",
+        appointment_type="check-up",
+        date_range="this week",
+    )
+    assert partial["status"] in {"PARTIAL", "UNKNOWN"}
+    if partial["status"] == "PARTIAL":
+        assert partial["coverage"]["complete"] is False

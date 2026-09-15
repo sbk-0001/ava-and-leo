@@ -62,6 +62,9 @@ uv sync
 |----------|---------|
 | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Agent worker, portal “Call Ava”, outbound `make_call.py`, evals |
 | `OPENAI_API_KEY` | Ava (OpenAI Realtime) |
+| `OPENAI_LIVE_API_KEY` | Optional. Live project key; must differ from `OPENAI_DEMO_API_KEY` / `OPENAI_HARNESS_API_KEY` |
+| `LIVEKIT_SIP_HOST` / `EXPECTED_SIP_HOST` | Telnyx SIP host (`5sft82r5337.sip.livekit.cloud`) |
+| `OVERFLOW_NUMBER` | Optional. 429 circuit-breaker overflow destination |
 | `ASSEMBLYAI_API_KEY`, `GROQ_API_KEY`, `CARTESIA_API_KEY` | Generic pipeline only |
 
 Load LiveKit Cloud credentials with the [LiveKit CLI](https://docs.livekit.io/intro/basics/cli/):

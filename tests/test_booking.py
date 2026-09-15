@@ -103,6 +103,8 @@ async def test_zavy360_stub_does_not_invent_slots() -> None:
     assert "zavy360" in result["reason"]
     assert result.get("slots") in (None, [])
     assert result.get("confirmed") is not True
+    assert result["status"] == "UNKNOWN"
+    assert result["may_say_chockers"] is False
 
 
 @pytest.mark.asyncio

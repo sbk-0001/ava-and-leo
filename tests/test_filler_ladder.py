@@ -238,3 +238,61 @@ async def test_cached_fast_path_cancels_after_stage_1() -> None:
     assert trace.fast_path is True
     assert elapsed < 0.5
     assert 2 not in trace.stages_spoken
+
+
+@pytest.mark.asyncio
+async def test_429_abandons_ladder_retries_once_then_fallback() -> None:
+    ladder, _clock, speaker, _state, booking = _ladder()
+    hits = {"n": 0}
+
+    async def flaky():
+        hits["n"] += 1
+        if hits["n"] == 1:
+            return {"ok": False, "reason": "rate_limit_exceeded", "http_status": 429}
+        return {"ok": False, "reason": "rate_limit_exceeded", "http_status": 429}
+
+    result, trace = await ladder.dispatch(flaky)
+    assert hits["n"] == 2
+    assert trace.abandoned_on_429 is True
+    assert trace.retries == 1
+    assert trace.path == "ERROR"
+    assert speaker.finish_word_calls >= 1
+    assert trace.finished_word_before_result is True
+    assert result["fallback"] in {"take_message", "transfer"}
+    assert booking.take_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_429_retry_success_skips_fallback() -> None:
+    ladder, _clock, speaker, _state, booking = _ladder()
+    hits = {"n": 0}
+
+    async def once():
+        hits["n"] += 1
+        if hits["n"] == 1:
+            return {"ok": False, "reason": "429"}
+        return {
+            "ok": True,
+            "status": "OK",
+            "slots": [{"slot_id": "slot_shellharbour_2026-09-16_1110_dr-mohit-tolani"}],
+        }
+
+    result, trace = await ladder.dispatch(once)
+    assert hits["n"] == 2
+    assert trace.abandoned_on_429 is True
+    assert result["ok"] is True
+    assert result["slots"]
+    assert booking.take_calls == 0
+    assert speaker.finish_word_calls >= 1
+
+
+@pytest.mark.asyncio
+async def test_empty_ok_path_is_not_error() -> None:
+    ladder, _clock, _speaker, _state, _booking = _ladder()
+
+    async def empty():
+        return {"ok": True, "status": "OK", "slots": []}
+
+    result, trace = await ladder.dispatch(empty)
+    assert result["ok"] is True
+    assert trace.path == "EMPTY"

@@ -300,3 +300,23 @@ def test_agent_publishes_desk_feed_for_every_ava_room() -> None:
     assert 'persona_key == "ava"' in entry
     assert "_notify_desk" in inspect.getsource(AvaReceptionist)
     assert "schedule_desk_publish" in inspect.getsource(AvaReceptionist)
+    assert "grounding_violation" in inspect.getsource(AvaReceptionist)
+
+
+def test_grounding_violation_packet_is_typed() -> None:
+    from grounding import GateResult, grounding_violation_packet
+
+    packet = grounding_violation_packet(
+        GateResult(
+            original="I've got half past two",
+            spoken="Hang on, let me check that properly — I don't want to give you the wrong time.",
+            suppressed=True,
+            violations=["time"],
+        ),
+        count=2,
+        branch="shellharbour",
+    )
+    assert packet["type"] == "grounding_violation"
+    assert packet["label"] == "GROUNDING_VIOLATION"
+    assert packet["payload"]["count"] == 2
+    assert packet["payload"]["violations"] == ["time"]

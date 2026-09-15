@@ -27,7 +27,7 @@ from livekit.agents.llm import ChatMessage
 from livekit.plugins import assemblyai, cartesia, groq
 
 from ambient import AmbientBed
-from ava_receptionist import AvaReceptionist, inbound_greeting_instructions
+from ava_receptionist import AvaReceptionist
 from availability_cache import CachedBookingProvider
 from backchannel import attach_backchannels
 from booking import apply_job_booking_overrides, get_shared_booking_provider
@@ -47,6 +47,11 @@ from sip_utils import (
     parse_job_metadata,
     register_sip_disconnect_handler,
     sip_error_details,
+)
+from startup_checks import (
+    RateLimitCircuitBreaker,
+    assert_live_openai_key,
+    assert_sip_host,
 )
 
 logger = logging.getLogger("agent")
@@ -559,7 +564,19 @@ async def my_agent(ctx: JobContext):
     )
     branch_id = get_branch(branch_id).id
     kill_switch = kill_switch_enabled()
-    call_state = CallState(branch=branch_id, kill_switch=kill_switch)
+    try:
+        assert_sip_host()
+        assert_live_openai_key()
+    except RuntimeError:
+        logger.exception("startup assert failed")
+        raise
+    call_state = CallState(
+        branch=branch_id,
+        kill_switch=kill_switch,
+        greet_on_enter=not bool(
+            phone_number or metadata.get("direction") == "outbound"
+        ),
+    )
     logger.info(
         "call_state ready before speech branch=%s name=%s kill_switch=%s today=%s",
         call_state.branch,
@@ -599,6 +616,14 @@ async def my_agent(ctx: JobContext):
         # OpenAI Realtime is speech-to-speech; no AssemblyAI/Groq/Cartesia pipeline.
         # Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/
         session = _build_ava_session()
+        orig_say = session.say
+
+        def _gated_say(text: Any, *args: Any, **kwargs: Any) -> Any:
+            if isinstance(text, str):
+                text = agent._gate_speech(text)
+            return orig_say(text, *args, **kwargs)
+
+        session.say = _gated_say  # type: ignore[method-assign]
         attach_backchannels(session, call_state)
         _register_desk_feed(session, ctx.room)
     else:
@@ -611,6 +636,7 @@ async def my_agent(ctx: JobContext):
 
     _register_latency_logging(session)
     rate_limit = RateLimitRecovery()
+    breaker = RateLimitCircuitBreaker()
 
     async def _trim_on_rate_limit() -> None:
         if persona_key == "ava":
@@ -622,6 +648,9 @@ async def my_agent(ctx: JobContext):
         if not is_rate_limit_error(err):
             return
         logger.warning("openai realtime rate_limit_exceeded: %s", err)
+        if breaker.record_429():
+            overflow = breaker.overflow_number()
+            logger.error("429 circuit breaker OPEN; overflow number=%s", overflow)
         recoverable = getattr(err, "recoverable", None)
         if recoverable is False:
             err.recoverable = True
@@ -672,12 +701,9 @@ async def my_agent(ctx: JobContext):
             await ambient.start(session, ctx.room)
         except Exception:
             logger.exception("ambient bed failed; call continues without it")
-
-    outbound = bool(phone_number) or metadata.get("direction") == "outbound"
-    if persona_key == "ava" and not outbound and not kill_switch:
-        await session.generate_reply(
-            instructions=inbound_greeting_instructions(call_state.branch)
-        )
+    # Web and inbound SIP greet in AvaReceptionist.on_enter (session start).
+    # Outbound waits for the callee. Docs:
+    # https://docs.livekit.io/telephony/making-calls/outbound-calls/
 
 
 if __name__ == "__main__":

@@ -6,7 +6,8 @@ Fillers are a **buffer read** onto the outbound mix — they must never call
 
 | Field | Value |
 | --- | --- |
-| Voice | `marin` (same as live Ava Realtime) when OpenAI TTS is used |
+| Voice | `marin` (same as live Ava Realtime) |
+| Source | `openai-tts-gpt-4o-mini-tts` |
 | Speed | `0.9` |
 | Sample rate | 48 kHz mono PCM WAV |
 

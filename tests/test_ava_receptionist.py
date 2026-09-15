@@ -11,6 +11,7 @@ from ava_receptionist import (
     inbound_greeting_instructions,
     resolve_ava_voice,
 )
+from persona import GROUP_NAME
 
 
 def test_default_realtime_voice_is_marin() -> None:
@@ -27,19 +28,54 @@ def test_end_call_tool_ignores_on_enter() -> None:
     assert "ignore_on_enter" in inspect.signature(EndCallTool.__init__).parameters
 
 
+def test_booking_tools_still_present() -> None:
+    """Routing change must not drop book / reschedule / cancel."""
+    source = inspect.getsource(AvaReceptionist)
+    assert "async def book_appointment" in source
+    assert "async def reschedule_appointment" in source
+    assert "async def cancel_appointment" in source
+    assert "async def get_availability" in source
+    assert "clinic the caller chose" in source
+
+
 def test_inbound_greeting_is_ava_and_human() -> None:
-    """First line is Ava, warm, one short sentence plus one question."""
+    """First line is Ava at Illawarra Dentists, then clinic choice."""
     text = inbound_greeting_instructions("dapto")
     lowered = text.lower()
     assert "ava" in lowered
     assert "leo" not in lowered
-    assert "dapto dentists" in lowered
+    assert GROUP_NAME.lower() in lowered
+    assert "ava at illawarra dentists" in lowered
+    leftover = text.replace(GROUP_NAME, "")
+    assert "Illawarra Dental" not in leftover
+    assert "Illawarra Group" not in leftover
+    assert "ava at dapto dentists" not in lowered
+    assert "ava at shellharbour dentists" not in lowered
+    assert "ava at woonona dentists" not in lowered
+    assert "shellharbour" in lowered
     assert "dapto" in lowered
+    assert "woonona" in lowered
     assert "warm" in lowered or "human" in lowered
-    assert "booking" in lowered
+    assert "booking" in lowered or "book" in lowered or "help" in lowered
     assert "one" in lowered and "question" in lowered
     assert "short" in lowered
-    assert len(text) < 400
+    assert "script" in lowered or "menu" in lowered
+    assert "list" in lowered
+    assert "ssml" in lowered or "stage" in lowered
+    assert "debto" not in lowered
+    assert "winona" not in lowered
+    assert len(text) < 750
+
+
+def test_inbound_greeting_identity_ignores_mapped_branch() -> None:
+    """DID/portal branch is not the number the caller reached."""
+    for branch_id in ("shellharbour", "dapto", "woonona"):
+        text = inbound_greeting_instructions(branch_id)
+        lowered = text.lower()
+        assert "ava at illawarra dentists" in lowered
+        leftover = text.replace(GROUP_NAME, "")
+        assert "Illawarra Dental" not in leftover
+        assert f"ava at {branch_id} dentists" not in lowered
 
 
 def test_ava_session_uses_realtime_llm_and_interruptions() -> None:
@@ -51,16 +87,20 @@ def test_ava_session_uses_realtime_llm_and_interruptions() -> None:
     assert "True" in source
 
 
-def test_realtime_model_enables_barge_in_and_snappy_vad() -> None:
-    """OpenAI Realtime turn detection must allow barge-in and close turns quickly.
+def test_realtime_model_enables_barge_in_and_human_turns() -> None:
+    """OpenAI Realtime turn detection should feel human and still allow barge-in.
 
+    Semantic VAD is the documented default: less likely to cut the caller off
+    mid-sentence. interrupt_response stays on so they can barge in.
     Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/#turn-detection
           https://docs.livekit.io/agents/logic/turns/#interruption-in-realtime-mode
     """
     source = inspect.getsource(ava_realtime_model)
     assert "interrupt_response" in source
     assert "True" in source
-    assert "server_vad" in source
-    assert "silence_duration_ms" in source
-    assert "400" in source
+    assert "semantic_vad" in source
+    assert "eagerness" in source
+    assert "medium" in source
     assert "create_response" in source
+    assert "ssml" not in source.lower()
+    assert "temperature" in source

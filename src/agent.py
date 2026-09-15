@@ -1,6 +1,7 @@
 import logging
 import os
 import textwrap
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,7 +21,7 @@ from livekit.agents import (
     room_io,
 )
 from livekit.agents.llm import ChatMessage
-from livekit.plugins import ai_coustics, assemblyai, cartesia, groq
+from livekit.plugins import assemblyai, cartesia, groq
 
 from ava_receptionist import AvaReceptionist, inbound_greeting_instructions
 from persona import CANONICAL_PERSONAS, canonical_persona, resolve_persona
@@ -332,14 +333,96 @@ def _build_ava_session() -> AgentSession:
     )
 
 
-def _room_options() -> room_io.RoomOptions:
-    return room_io.RoomOptions(
-        audio_input=room_io.AudioInputOptions(
-            noise_cancellation=ai_coustics.audio_enhancement(
-                model=ai_coustics.EnhancerModel.QUAIL_VF_S
-            ),
-        ),
+def resolve_noise_cancellation(
+    *,
+    env: Mapping[str, str] | None = None,
+):
+    """Krisp BVC by default (AVA_NOISE_CANCELLATION=1). Fail soft on any error.
+
+    Enabling ai_coustics.audio_enhancement without valid enhancer auth previously
+    hung session.start with 0 published audio tracks (silent Ava on Call Ava).
+    ImportError or runtime failure must return None so _room_options uses empty
+    RoomOptions() and Ava still publishes audio.
+    Docs: https://docs.livekit.io/transport/media/noise-cancellation/
+          https://docs.livekit.io/agents/logic/sessions/
+    """
+    environ = env if env is not None else os.environ
+    mode = str(environ.get("AVA_NOISE_CANCELLATION", "1")).strip().lower()
+    if mode in {"off", "0", "false", "none", "disabled"}:
+        return None
+    if mode in {"ai_coustics", "aicoustics", "quail", "ai-coustics"}:
+        license_key = str(environ.get("AI_COUSTICS_LICENSE_KEY", "")).strip()
+        if license_key:
+            try:
+                from livekit.plugins import ai_coustics
+
+                return ai_coustics.audio_enhancement(
+                    model=ai_coustics.EnhancerModel.QUAIL_VF_S,
+                    auth=ai_coustics.Auth.ai_coustics_api(license_key=license_key),
+                )
+            except Exception:
+                logger.exception(
+                    "ai-coustics enhancer failed; using empty RoomOptions so Ava "
+                    "still publishes audio."
+                )
+                return None
+        logger.warning(
+            "AVA_NOISE_CANCELLATION=ai_coustics ignored without "
+            "AI_COUSTICS_LICENSE_KEY (missing enhancer auth previously silenced "
+            "Call Ava). Falling back to Krisp BVC."
+        )
+        mode = "1"
+    if mode in {"", "krisp", "bvc", "on", "true", "1", "yes"}:
+        try:
+            from livekit.plugins import noise_cancellation
+
+            noise_cancellation.BVC()
+            noise_cancellation.BVCTelephony()
+        except Exception:
+            logger.exception(
+                "Krisp noise cancellation unavailable; using empty RoomOptions "
+                "so Ava still publishes audio."
+            )
+            return None
+
+        def _select(params: Any):
+            try:
+                participant = getattr(params, "participant", None)
+                if is_sip_participant(participant):
+                    return noise_cancellation.BVCTelephony()
+                return noise_cancellation.BVC()
+            except Exception:
+                logger.exception(
+                    "Krisp filter failed at attach time; skipping NC for this "
+                    "participant so audio still publishes."
+                )
+                return None
+
+        return _select
+    logger.warning(
+        "Unknown AVA_NOISE_CANCELLATION=%r; attaching no filter.",
+        mode,
     )
+    return None
+
+
+def _room_options(*, env: Mapping[str, str] | None = None) -> room_io.RoomOptions:
+    """Attach Krisp NC when it loads; empty RoomOptions() if anything fails."""
+    try:
+        filt = resolve_noise_cancellation(env=env)
+        if filt is None:
+            return room_io.RoomOptions()
+        return room_io.RoomOptions(
+            audio_input=room_io.AudioInputOptions(
+                noise_cancellation=filt,
+            ),
+        )
+    except Exception:
+        logger.exception(
+            "RoomOptions NC setup failed; using empty RoomOptions so Ava still "
+            "publishes audio."
+        )
+        return room_io.RoomOptions()
 
 
 server = AgentServer()

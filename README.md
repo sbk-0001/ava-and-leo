@@ -2,9 +2,9 @@
   <img src="./.github/assets/livekit-mark.png" alt="LiveKit logo" width="100" height="100">
 </a>
 
-# Ava — Shellharbour Dentists receptionist
+# Ava — Illawarra Dentists receptionist
 
-Ava is the phone receptionist for the Shellharbour Dentists group (Barrack Heights, Dapto, Woonona): OpenAI Realtime (`gpt-realtime`, voice **marin**), low-latency speech-to-speech. The older generic AssemblyAI/Groq/Cartesia assistant is a secondary pipeline (`AGENT_PERSONA=generic`, alias `ava-generic`). `AGENT_PERSONA=leo` still maps to Ava so old env files keep working.
+Ava is the phone receptionist for **Illawarra Dentists** (Barrack Heights / Shellharbour Dentists, Dapto Dentists, Woonona Dentists): OpenAI Realtime (`gpt-realtime`, voice **marin**), low-latency speech-to-speech. Callers reach the Illawarra Dentists group number first; Ava then helps them choose which clinic to book at. The older generic AssemblyAI/Groq/Cartesia assistant is a secondary pipeline (`AGENT_PERSONA=generic`, alias `ava-generic`). `AGENT_PERSONA=leo` still maps to Ava so old env files keep working.
 
 | `AGENT_PERSONA` | Who | Path |
 |-----------------|-----|------|
@@ -19,12 +19,28 @@ Ava's spoken style, branch facts, fee catalogue, and tool rules live in [`src/pe
 
 ## Low-latency Realtime (not zero latency)
 
-Ava stays on OpenAI Realtime speech-to-speech. Settings aimed at snappy, interruptible phone turns (verified against [OpenAI Realtime turn detection](https://docs.livekit.io/agents/models/realtime/plugins/openai/#turn-detection) and [interruption in realtime mode](https://docs.livekit.io/agents/logic/turns/#interruption-in-realtime-mode)):
+Ava stays on OpenAI Realtime speech-to-speech (`marin`). Settings aimed at human, interruptible phone turns (verified against [OpenAI Realtime turn detection](https://docs.livekit.io/agents/models/realtime/plugins/openai/#turn-detection) and [interruption in realtime mode](https://docs.livekit.io/agents/logic/turns/#interruption-in-realtime-mode)):
 
-- Server VAD with `silence_duration_ms=400` and `threshold=0.7` (telephony-friendly)
+- Semantic VAD with `eagerness="medium"` (documented default; less likely to cut the caller off mid-sentence)
 - `interrupt_response=True` so the caller can barge in
+- `temperature=0.9` for slightly more natural variation
 - `AgentSession` `turn_detection="realtime_llm"` with interruptions enabled
-- Spoken replies kept to one or two sentences; parking/hours/dentists are instant facts (no tool round-trip before speaking)
+- Spoken replies kept to one idea per turn; parking/hours/dentists are instant facts (no tool round-trip before speaking)
+- No SSML or `[laughs]` tags — Realtime marin cannot render them
+
+## Noise cancellation (Call Ava and SIP)
+
+Default is LiveKit Cloud **Krisp BVC** on web participants and **BVCTelephony** on SIP. That is the [documented RoomOptions path](https://docs.livekit.io/transport/media/noise-cancellation/) and does not use the ai-coustics enhancer.
+
+Do **not** enable ai-coustics unless you have a license. `ai_coustics.audio_enhancement` without valid enhancer auth previously hung `session.start` with **0 published audio tracks** (silent Ava on the portal). Missing auth now fails soft: Ava still publishes audio.
+
+| `AVA_NOISE_CANCELLATION` | Effect |
+|--------------------------|--------|
+| unset / `1` / `krisp` | Krisp BVC (web) / BVCTelephony (SIP). Safe default. Import or runtime failure → empty `RoomOptions()` + warning. |
+| `0` / `off` | Empty `RoomOptions()` — no filter. |
+| `ai_coustics` | QUAIL_VF_S **only** when `AI_COUSTICS_LICENSE_KEY` is set. Otherwise falls back to Krisp. Any failure → empty `RoomOptions()`. |
+
+Requires `livekit-plugins-noise-cancellation` (already in this project). LiveKit Cloud bills Krisp NC on the agent input path.
 
 ## Dev setup
 
@@ -132,16 +148,16 @@ uv run python src/make_call.py --to +61400000000 --branch dapto
 
 The script [dispatches](https://docs.livekit.io/agents/server/agent-dispatch/) agent `ava-and-leo` and calls [`CreateSIPParticipant`](https://docs.livekit.io/telephony/making-calls/outbound-calls/) with `wait_until_answered=True`. Failed dials raise `TwirpError` / `SipCallError` (busy, no answer, trunk failure). Mid-call hangups are handled per [SIP disconnect docs](https://docs.livekit.io/telephony/making-calls/outbound-calls/#mid-call-disconnections): `USER_UNAVAILABLE` and `SIP_TRUNK_FAILURE` explicitly shut down the job.
 
-On outbound, Ava waits for the callee to speak first. On inbound, Ava greets as the mapped branch.
+On outbound, Ava waits for the callee to speak first. On inbound, Ava greets as Illawarra Dentists, then helps choose Shellharbour, Dapto, or Woonona.
 
 ## Tests
 
 ```bash
-uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py -v
+uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py tests/test_room_options.py -v
 uv run pytest            # includes generic-pipeline evals; needs LIVEKIT_* in CI
 ```
 
-Unit tests cover persona switching, Ava naming, human VOICE_INSTRUCTIONS, branch facts (parking/hours/dentists), canned fees, DID mapping (including a MagicMock console participant), mock book/reschedule/cancel `confirmed=true`, and the marin voice default.
+Unit tests cover persona switching, Ava naming, human VOICE_INSTRUCTIONS, Illawarra Dentists greeting, Krisp noise-cancellation gating, branch facts (parking/hours/dentists), canned fees, DID mapping (including a MagicMock console participant), mock book/reschedule/cancel `confirmed=true`, and the marin voice default.
 
 ## Layout
 

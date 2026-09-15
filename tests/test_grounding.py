@@ -1,5 +1,6 @@
 """Grounding gate: only SpeakableFacts from successful tools may be spoken."""
 
+import logging
 from datetime import date
 
 import pytest
@@ -8,8 +9,10 @@ from call_state import CallState
 from grounding import (
     CONFIRM_SUBSTITUTE,
     DATE_SUBSTITUTE,
+    GATE_PASS_DOB_UTTERANCES,
     SAFE_SUBSTITUTE,
     SpeakableFacts,
+    confirm_claim_kind,
     gate_utterance,
     grounded_realtime_transcription,
     ingest_availability,
@@ -80,6 +83,47 @@ def test_confirm_intent_is_not_a_completed_booking() -> None:
         assert gated.spoken == line
     locked_in = gate_utterance("let me lock that in for ya", facts)
     assert locked_in.suppressed is False
+
+
+def test_gate_allows_dob_confirm_and_privacy_callback_phrases() -> None:
+    facts = SpeakableFacts()
+    assert "confirm your date of birth" in GATE_PASS_DOB_UTTERANCES
+    for line in GATE_PASS_DOB_UTTERANCES:
+        kind = confirm_claim_kind(line)
+        assert kind != "completed", line
+        assert kind != "ambiguous", line
+        gated = gate_utterance(line, facts)
+        assert gated.suppressed is False, (line, gated.violations, gated.spoken)
+        assert gated.ambiguous is False, line
+        assert gated.spoken == line
+        assert "you're booked" not in line.lower()
+
+    blocked = gate_utterance("You're all set, booked in.", facts)
+    assert blocked.suppressed is True
+    assert blocked.recovery is True
+
+
+def test_ambiguous_log_once_per_completed_utterance_not_per_token(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    facts = SpeakableFacts()
+    spoken = "confirm this for me"
+    with caplog.at_level(logging.INFO, logger="ava.grounding"):
+        accumulated = ""
+        for char in spoken:
+            accumulated += char
+            gate_utterance(accumulated, facts, log=False)
+        gate_utterance(spoken, facts, log=True)
+        gate_utterance(spoken + " please", facts, log=True)
+        gate_utterance("lock it", facts, log=True)
+    lines = [
+        record.getMessage()
+        for record in caplog.records
+        if "GROUNDING_AMBIGUOUS" in record.getMessage()
+    ]
+    assert len(lines) == 2, lines
+    assert "confirm this for me" in lines[0]
+    assert "lock it" in lines[1]
 
 
 def test_confirm_language_blocked_until_book_confirmed() -> None:

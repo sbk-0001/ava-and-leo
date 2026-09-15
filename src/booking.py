@@ -855,6 +855,7 @@ def seed_inside_24h_booking(
         patient_id="pat_priya_ns",
         name="Priya Nair",
         phone="0413000222",
+        date_of_birth="1991-11-04",
     )
     slot_id = "slot_priya_ns_24h"
     client.seed_slot(

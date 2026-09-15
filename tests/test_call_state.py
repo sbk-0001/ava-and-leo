@@ -166,6 +166,18 @@ def test_no_confirm_without_successful_book() -> None:
     assert "booking_locked: True" in state.prompt_block()
 
 
+def test_booking_identity_requires_name_before_book() -> None:
+    state = CallState(caller_mobile="0412334556")
+    need = state.missing_booking_identity(name=None, mobile="0412334556")
+    assert need == ["name"]
+    result = state.booking_need_fields_result(need)
+    assert result["reason"] == "need_fields"
+    assert "name" in result["need_fields"]
+    assert "name" in result["say"].lower()
+    state.caller_name = "Sam Smith"
+    assert state.missing_booking_identity(name=None, mobile="0412334556") == []
+
+
 def test_apply_confirmation_gate_rejects_ok_without_confirmed() -> None:
     gated = apply_confirmation_gate(
         {"ok": True, "confirmed": False, "reason": "pending"}

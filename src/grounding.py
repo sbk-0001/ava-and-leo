@@ -208,9 +208,33 @@ GATE_PASS_UTTERANCES: tuple[str, ...] = (
     "booking it for you now",
     "let's lock it in if that suits",
 )
+GATE_PASS_DOB_UTTERANCES: tuple[str, ...] = (
+    "confirm your date of birth",
+    "what's your DOB",
+    "just confirming your date of birth",
+    "I can't confirm that, I'll get the team to call you back",
+    "I can't confirm that",
+    "what's your date of birth",
+)
 _CHOCKERS_RE = re.compile(
     r"\b(?:chockers|fully\s+booked|nothing(?:\s+at\s+all)?\s+"
     r"(?:this|next)\s+week|packed\s+(?:this|next)\s+week)\b",
+    re.I,
+)
+_DOB_VERIFY_RE = re.compile(
+    r"(?:"
+    r"\b(?:date of birth|d\.?\s*o\.?\s*b\.?|dob)\b|"
+    r"\bwhat(?:'s| is) your dob\b"
+    r")",
+    re.I,
+)
+_PRIVACY_REFUSAL_RE = re.compile(
+    r"(?:"
+    r"can(?:not|'t)\s+confirm|"
+    r"can(?:not|'t)\s+say|"
+    r"get the team to (?:call|ring) (?:you )?back|"
+    r"have (?:the|our) team (?:call|ring) (?:you )?back"
+    r")",
     re.I,
 )
 _WEEKDAY_RE = re.compile(
@@ -232,6 +256,7 @@ class SpeakableFacts:
     availability_status: str | None = None
     slots_empty: bool = False
     date_resolved: bool = False
+    _ambiguous_log_stem: str = field(default="", repr=False)
 
     @property
     def may_say_chockers(self) -> bool:
@@ -500,17 +525,29 @@ def is_completed_booking_claim(text: str) -> bool:
     return bool(_COMPLETED_CONFIRM_RE.search(text or ""))
 
 
+def is_dob_verification_language(text: str) -> bool:
+    """Verification asks — never treat as a booking confirm claim."""
+    return bool(_DOB_VERIFY_RE.search(text or ""))
+
+
+def is_privacy_safe_refusal(text: str) -> bool:
+    """Callback / cannot-confirm lines that must still be speakable."""
+    return bool(_PRIVACY_REFUSAL_RE.search(text or ""))
+
+
 def confirm_claim_kind(text: str) -> str:
     """Return 'intent', 'completed', 'ambiguous', or 'none'."""
-    intent = is_booking_intent(text)
     completed = is_completed_booking_claim(text)
-    if intent and not completed:
-        return "intent"
+    intent = is_booking_intent(text)
     if completed and not intent:
         return "completed"
+    if intent and not completed:
+        return "intent"
     if intent and completed:
         # "I'll get that booked" contains future intent + the word booked.
         return "intent"
+    if is_dob_verification_language(text) or is_privacy_safe_refusal(text):
+        return "none"
     if _LOCK_CONFIRM_WORD_RE.search(text or ""):
         return "ambiguous"
     return "none"
@@ -527,6 +564,20 @@ def grounding_corrective_note(original: str, kinds: list[str]) -> str:
     kinds_s = ",".join(kinds) or "ungrounded"
     clipped = (original or "")[:160]
     return f"{CORRECTIVE_NOTE} kinds={kinds_s}. Blocked (do not speak): {clipped!r}"
+
+
+def _should_log_ambiguous(facts: SpeakableFacts, original: str) -> bool:
+    """Log GROUNDING_AMBIGUOUS once per completed utterance, not per token."""
+    text = (original or "").strip()
+    if not text:
+        return False
+    stem = facts._ambiguous_log_stem
+    if stem and (text.startswith(stem) or stem.startswith(text)):
+        if len(text) > len(stem):
+            facts._ambiguous_log_stem = text
+        return False
+    facts._ambiguous_log_stem = text
+    return True
 
 
 def gate_utterance(text: str, facts: SpeakableFacts, *, log: bool = True) -> GateResult:
@@ -551,7 +602,7 @@ def gate_utterance(text: str, facts: SpeakableFacts, *, log: bool = True) -> Gat
     def _finish(result: GateResult) -> GateResult:
         if log and result.suppressed:
             logger.warning("%s", result.log_line)
-        elif log and result.ambiguous:
+        elif log and result.ambiguous and _should_log_ambiguous(facts, original):
             logger.info("%s", result.log_line)
         return result
 
@@ -563,7 +614,6 @@ def gate_utterance(text: str, facts: SpeakableFacts, *, log: bool = True) -> Gat
         return _recover(["confirm"])
     if kind == "ambiguous" and not facts.confirm_allowed:
         ambiguous = True
-        logger.info("GROUNDING_AMBIGUOUS original=%r", original)
 
     if _CHOCKERS_RE.search(spoken) and not facts.may_say_chockers:
         return _recover(["chockers"])

@@ -561,10 +561,11 @@ async def my_agent(ctx: JobContext):
     kill_switch = kill_switch_enabled()
     call_state = CallState(branch=branch_id, kill_switch=kill_switch)
     logger.info(
-        "call_state ready before speech branch=%s name=%s kill_switch=%s",
+        "call_state ready before speech branch=%s name=%s kill_switch=%s today=%s",
         call_state.branch,
         call_state.branch_name,
         kill_switch,
+        call_state.today_spoken,
     )
 
     started_at = datetime.now(timezone.utc)

@@ -1,6 +1,7 @@
 """Ava Realtime voice defaults, barge-in, tools, and branch greeting."""
 
 import inspect
+from datetime import date
 from types import SimpleNamespace
 
 import pytest
@@ -144,6 +145,7 @@ def test_agent_builds_call_state_before_speech() -> None:
     source = inspect.getsource(my_agent)
     assert "CallState(branch=branch_id" in source
     assert "call_state ready before speech" in source
+    assert "today=%s" in source
     assert "kill_switch" in source
     assert "inbound_greeting_instructions(call_state.branch)" in source
     assert "is_rate_limit_error" in source
@@ -156,7 +158,9 @@ def test_agent_builds_call_state_before_speech() -> None:
 
 
 @pytest.mark.asyncio
-async def test_practice_tools_notify_desk_on_success(monkeypatch) -> None:
+async def test_practice_tools_notify_desk_including_booking_failures(
+    monkeypatch,
+) -> None:
     """Desk activity must fire from the tool method for web and SIP."""
     from booking import MemoryBookingProvider
     from call_state import CallState
@@ -173,7 +177,7 @@ async def test_practice_tools_notify_desk_on_success(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     events: list[dict] = []
     ava = AvaReceptionist(
-        state=CallState(branch="shellharbour"),
+        state=CallState(branch="shellharbour", today=date(2026, 9, 15)),
         booking=MemoryBookingProvider(practice),
         on_desk_event=events.append,
     )
@@ -194,6 +198,7 @@ async def test_practice_tools_notify_desk_on_success(monkeypatch) -> None:
         mobile="0412222333",
     )
     assert booked["confirmed"] is True
+    assert ava.state.may_confirm_booking() is True
     invented = await ava.book_appointment(
         dummy,
         slot_id="slot-8-30-tuesday-dr-mohit-tolani-follow-up",
@@ -202,6 +207,9 @@ async def test_practice_tools_notify_desk_on_success(monkeypatch) -> None:
         mobile="0412000111",
     )
     assert invented["reason"] == "invalid_slot_id"
+    assert invented["confirmed"] is False
+    assert "not locked" in invented["say"].lower()
+    assert ava.state.may_confirm_booking() is False
     moved = await ava.reschedule_appointment(
         dummy, booking_id=booked["booking_id"], new_slot_id="missing"
     )
@@ -224,6 +232,85 @@ async def test_practice_tools_notify_desk_on_success(monkeypatch) -> None:
     assert "take_message" in actions
     assert "check_availability" in actions
     assert "reschedule_appointment" not in actions
-    book = next(event for event in events if event["action"] == "book_appointment")
-    assert book["refresh_diary"] is True
-    assert book["payload"]["name"] == "Jamie Cole"
+    books = [event for event in events if event["action"] == "book_appointment"]
+    assert any(event["refresh_diary"] for event in books)
+    assert any(
+        event["payload"].get("failure_reason") == "invalid_slot_id" for event in books
+    )
+    success = next(event for event in books if event["refresh_diary"])
+    assert success["payload"]["name"] == "Jamie Cole"
+
+
+@pytest.mark.asyncio
+async def test_book_appointment_slot_gone_is_not_verbally_confirmed(
+    monkeypatch,
+) -> None:
+    from call_state import CallState
+
+    class _Gone:
+        async def book_appointment(self, **kwargs):
+            return {
+                "ok": False,
+                "confirmed": False,
+                "reason": "slot_gone",
+                "slot_id": kwargs["slot_id"],
+                "note": "That time just went. Do not say confirmed.",
+            }
+
+        async def check_availability(self, **kwargs):
+            return {"ok": True, "slots": []}
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    events: list[dict] = []
+    ava = AvaReceptionist(
+        state=CallState(branch="shellharbour", today=date(2026, 9, 15)),
+        booking=_Gone(),
+        on_desk_event=events.append,
+    )
+
+    async def _run_only(self, context, factory):
+        return await factory()
+
+    monkeypatch.setattr(AvaReceptionist, "_dispatch_with_ladder", _run_only)
+    result = await ava.book_appointment(
+        SimpleNamespace(),
+        slot_id="slot_shellharbour_2026-09-15_1430_dr-mohit-tolani",
+        reason="broken tooth",
+        name="Robert",
+        mobile="0412334556",
+    )
+    assert result["ok"] is False
+    assert result["confirmed"] is False
+    assert result["reason"] == "slot_gone"
+    assert ava.state.may_confirm_booking() is False
+    assert "not locked" in result["say"].lower()
+    assert "do not say you're all set" in result["say"].lower()
+    assert events and events[-1]["payload"]["failure_reason"] == "slot_gone"
+
+
+@pytest.mark.asyncio
+async def test_check_availability_uses_preferred_clinician(monkeypatch) -> None:
+    from booking import MemoryBookingProvider
+    from call_state import CallState
+    from practice import PracticeClient, seed_mock_diary
+
+    practice = PracticeClient(mode="mock")
+    seed_mock_diary(practice, today=date(2026, 9, 15), days=7)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    state = CallState(branch="shellharbour", today=date(2026, 9, 15))
+    state.observe_user_text("I'd like Dr Mohit please")
+    ava = AvaReceptionist(state=state, booking=MemoryBookingProvider(practice))
+
+    async def _run_only(self, context, factory):
+        return await factory()
+
+    monkeypatch.setattr(AvaReceptionist, "_dispatch_with_ladder", _run_only)
+    result = await ava.check_availability(
+        SimpleNamespace(), appointment_type="emergency", date_range="this week"
+    )
+    assert result["ok"] is True
+    assert result["slots"]
+    assert all(
+        "mohit" in (slot.get("clinician") or "").lower() for slot in result["slots"]
+    )
+    assert ava.state.may_offer_times() is True

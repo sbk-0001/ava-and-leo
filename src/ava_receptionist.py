@@ -345,13 +345,25 @@ class AvaReceptionist(Agent):
                     ),
                 }
             self.state.appointment_type = appointment_type
+            chosen = clinician or self.state.preferred_clinician
+            if clinician:
+                self.state.preferred_clinician = clinician
             result = await self.booking.check_availability(
                 branch=clinic_id,
                 appointment_type=appointment_type,
                 date_range=date_range,
-                clinician=clinician,
+                clinician=chosen,
             )
             self.state.remember_availability(result)
+            if result.get("ok") and not result.get("slots"):
+                result = dict(result)
+                result.setdefault(
+                    "note",
+                    (
+                        "No diary slots to offer. Do not invent a time. "
+                        "Do not say half past two or any clock time."
+                    ),
+                )
             return result
 
         result = await self._dispatch_with_ladder(context, _run)
@@ -362,7 +374,7 @@ class AvaReceptionist(Agent):
                 "appointment_type": appointment_type,
                 "date_range": date_range,
                 "branch": branch,
-                "clinician": clinician,
+                "clinician": clinician or self.state.preferred_clinician,
             },
         )
         return result
@@ -381,7 +393,8 @@ class AvaReceptionist(Agent):
     ) -> dict[str, Any]:
         """Book only an exact slot_id from check_availability. Never invent ids.
 
-        Call check_availability first. Say confirmed only if confirmed is true.
+        Call check_availability first. Say confirmed / you're all set only if
+        the result has ok true and confirmed true. Otherwise say it is not locked.
 
         Args:
             branch: Clinic id: shellharbour, dapto, or woonona.
@@ -420,12 +433,13 @@ class AvaReceptionist(Agent):
                 mobile=self.state.caller_mobile,
                 date_of_birth=date_of_birth,
             )
-            if booked.get("confirmed"):
-                self.state.confirmed_slot = slot_id
-                self.state.intent = "booked"
+            booked = dict(booked)
+            booked.setdefault("slot_id", slot_id)
             return booked
 
-        result = await self._dispatch_with_ladder(context, _run)
+        result = self.state.record_book_result(
+            await self._dispatch_with_ladder(context, _run)
+        )
         self._log_tool(
             "book_appointment",
             result,

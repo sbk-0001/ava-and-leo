@@ -6,6 +6,9 @@ Two delivery paths (both kept):
    desk reads ``GET /api/desk/stream`` (SSE). Phone/SIP rooms such as
    ``call-+61…`` have no portal participant, so the HTTP bus is required.
 
+Realtime conversation items are not always ``ChatMessage`` instances — packet
+builders duck-type ``role`` + ``text_content`` so those turns still publish.
+
 Docs: https://docs.livekit.io/reference/agents/events/#conversation_item_added
       https://docs.livekit.io/transport/data/packets/
 """
@@ -21,7 +24,7 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from livekit.agents.llm import ChatMessage, FunctionCall, FunctionCallOutput
+from livekit.agents.llm import FunctionCall, FunctionCallOutput
 
 logger = logging.getLogger("desk")
 
@@ -50,6 +53,8 @@ DIARY_MUTATIONS = frozenset(
     }
 )
 
+BOOKING_FAILURE_REASONS = frozenset({"slot_gone", "invalid_slot_id"})
+
 _ACTIVITY_LABELS = {
     "lookup_patient": "Looked up patient",
     "find_patient": "Looked up patient",
@@ -60,6 +65,11 @@ _ACTIVITY_LABELS = {
     "cancel_appointment": "Cancelled appointment",
     "take_message": "Took a message",
     "leave_message": "Took a message",
+}
+
+_FAILURE_LABELS = {
+    "slot_gone": "Booking failed (slot gone)",
+    "invalid_slot_id": "Booking failed (invalid slot)",
 }
 
 
@@ -82,16 +92,40 @@ def _first(*values: Any) -> Any:
     return None
 
 
+def _item_text(item: Any) -> str:
+    text = getattr(item, "text_content", None)
+    if text not in (None, ""):
+        return str(text)
+    content = getattr(item, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            else:
+                nested = getattr(part, "text", None) or getattr(part, "content", None)
+                if nested:
+                    parts.append(str(nested))
+        return "".join(parts)
+    fallback = getattr(item, "text", None)
+    return str(fallback or "")
+
+
 def transcript_packet(item: Any) -> dict[str, Any] | None:
-    """Build a desk packet from a committed conversation turn."""
-    if not isinstance(item, ChatMessage):
+    """Build a desk packet from a committed conversation turn.
+
+    Duck-type ``role`` + ``text_content`` so OpenAI Realtime items publish even
+    when they are not ``livekit.agents.llm.ChatMessage`` instances.
+    """
+    role = getattr(item, "role", None)
+    if role not in {"user", "assistant"}:
         return None
-    if item.role not in {"user", "assistant"}:
-        return None
-    text = (item.text_content or "").strip()
+    text = _item_text(item).strip()
     if not text:
         return None
-    return {"type": "transcript", "role": item.role, "text": text}
+    return {"type": "transcript", "role": role, "text": text}
 
 
 def activity_payload(action: str, arguments: Any, output: Any) -> dict[str, Any]:
@@ -125,6 +159,9 @@ def activity_payload(action: str, arguments: Any, output: Any) -> dict[str, Any]
         ),
         "reason": _first(args.get("reason"), args.get("body"), result.get("reason")),
         "booking_id": _first(result.get("booking_id"), args.get("booking_id")),
+        "slot_id": _first(
+            result.get("slot_id"), args.get("slot_id"), args.get("new_slot_id")
+        ),
         "date": _first(
             result.get("date"),
             args.get("date"),
@@ -142,6 +179,9 @@ def activity_payload(action: str, arguments: Any, output: Any) -> dict[str, Any]
         "ok": bool(result.get("ok")),
         "confirmed": bool(result.get("confirmed")),
     }
+    failure = str(result.get("reason") or "")
+    if failure and not result.get("ok"):
+        payload["failure_reason"] = failure
     if action in {"check_availability", "get_availability"}:
         payload["open_slots"] = len(slots)
     if action in {"lookup_patient", "find_patient"}:
@@ -154,20 +194,29 @@ def activity_packet_from_result(
     arguments: Any,
     result: Any,
 ) -> dict[str, Any] | None:
-    """Build a desk activity packet from a successful practice-tool result."""
+    """Build a desk activity packet from a practice-tool result.
+
+    Successful tools always publish. Booking failures with ``slot_gone`` or
+    ``invalid_slot_id`` also publish so the desk can see a near-miss book.
+    """
     if action not in DESK_TOOLS:
         return None
     parsed = _parse_jsonish(result)
-    if not parsed.get("ok"):
+    ok = bool(parsed.get("ok"))
+    reason = str(parsed.get("reason") or "")
+    is_booking_failure = action in DIARY_MUTATIONS and reason in BOOKING_FAILURE_REASONS
+    if not ok and not is_booking_failure:
         return None
     payload = activity_payload(action, arguments, result)
+    label = _ACTIVITY_LABELS.get(action, action)
+    if not ok:
+        label = _FAILURE_LABELS.get(reason, f"{label} failed")
     return {
         "type": "activity",
         "action": action,
-        "label": _ACTIVITY_LABELS.get(action, action),
+        "label": label,
         "payload": payload,
-        "refresh_diary": action in DIARY_MUTATIONS
-        and bool(parsed.get("confirmed") or parsed.get("ok")),
+        "refresh_diary": action in DIARY_MUTATIONS and bool(parsed.get("confirmed")),
     }
 
 
@@ -235,8 +284,8 @@ async def post_desk_event_http(packet: dict[str, Any]) -> None:
     """POST one packet to the local portal bus. Never raise to the session."""
     try:
         await asyncio.to_thread(_post_desk_event_sync, packet)
-    except (URLError, TimeoutError, OSError):
-        logger.debug("desk http post skipped url=%s", desk_events_url())
+    except (URLError, TimeoutError, OSError) as exc:
+        logger.warning("desk http post failed url=%s error=%s", desk_events_url(), exc)
     except Exception:
         logger.exception("desk http post failed")
 

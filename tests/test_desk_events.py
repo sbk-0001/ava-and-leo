@@ -15,6 +15,7 @@ from desk_events import (
     activity_packet_from_result,
     desk_events_url,
     encode_desk_packet,
+    post_desk_event_http,
     publish_desk_packet,
     stamp_packet,
     transcript_packet,
@@ -44,10 +45,30 @@ def test_transcript_packet_from_user_and_ava_turns() -> None:
     }
 
 
-def test_transcript_packet_skips_empty_system_and_non_messages() -> None:
+def test_transcript_packet_duck_types_realtime_turns() -> None:
+    """Realtime items often are not ChatMessage — role + text_content is enough."""
+    realtime = SimpleNamespace(
+        role="assistant",
+        text_content="I've got half past two with Dr Mohit.",
+    )
+    packet = transcript_packet(realtime)
+    assert packet == {
+        "type": "transcript",
+        "role": "assistant",
+        "text": "I've got half past two with Dr Mohit.",
+    }
+    caller = SimpleNamespace(role="user", text_content="Broken tooth, this week.")
+    assert transcript_packet(caller)["role"] == "user"
+    assert (
+        transcript_packet(SimpleNamespace(role="system", text_content="nope")) is None
+    )
+    assert transcript_packet(SimpleNamespace(role="user", text_content="  ")) is None
+    assert transcript_packet(SimpleNamespace(role="user")) is None
+
+
+def test_transcript_packet_skips_empty_system() -> None:
     assert transcript_packet(ChatMessage(role="user", content=["  "])) is None
     assert transcript_packet(ChatMessage(role="system", content=["ignore"])) is None
-    assert transcript_packet(SimpleNamespace(role="user", text_content="hi")) is None
 
 
 def test_activity_packet_from_successful_book() -> None:
@@ -83,6 +104,35 @@ def test_activity_packet_from_successful_book() -> None:
     assert payload["booking_id"] == "bkg_abc"
     assert payload["date"] == "2026-09-15"
     assert payload["phone"] == "0412222333"
+
+
+def test_activity_packet_publishes_booking_failures() -> None:
+    gone = activity_packet_from_result(
+        "book_appointment",
+        {"slot_id": "slot_shellharbour_2026-09-15_1430_dr-mohit-tolani"},
+        {
+            "ok": False,
+            "confirmed": False,
+            "reason": "slot_gone",
+            "slot_id": "slot_shellharbour_2026-09-15_1430_dr-mohit-tolani",
+        },
+    )
+    assert gone is not None
+    assert gone["action"] == "book_appointment"
+    assert "slot gone" in gone["label"].lower()
+    assert gone["refresh_diary"] is False
+    assert gone["payload"]["failure_reason"] == "slot_gone"
+    assert gone["payload"]["ok"] is False
+    assert gone["payload"]["confirmed"] is False
+
+    invented = activity_packet_from_result(
+        "book_appointment",
+        {"slot_id": "slot-half-past-two"},
+        {"ok": False, "confirmed": False, "reason": "invalid_slot_id"},
+    )
+    assert invented is not None
+    assert invented["payload"]["failure_reason"] == "invalid_slot_id"
+    assert "invalid" in invented["label"].lower()
 
 
 def test_activity_packets_cover_lookup_availability_reschedule_cancel_message() -> None:
@@ -142,10 +192,17 @@ def test_activity_packets_cover_lookup_availability_reschedule_cancel_message() 
     assert message["payload"]["reason"] == "Call back about a filling"
 
 
-def test_activity_packet_skips_failed_or_unknown_tools() -> None:
+def test_activity_packet_skips_unknown_or_unrelated_failures() -> None:
     assert activity_packet_from_result("book_appointment", {}, {"ok": False}) is None
     assert activity_packet_from_result("quote_fee", {}, {"ok": True}) is None
     assert activity_packet_from_result("end_call", {}, {"ok": True}) is None
+    assert activity_packet_from_result("lookup_patient", {}, {"ok": False}) is None
+    assert (
+        activity_packet_from_result(
+            "reschedule_appointment", {}, {"ok": False, "reason": "not_found"}
+        )
+        is None
+    )
 
 
 def test_diary_mutations_are_book_reschedule_cancel() -> None:
@@ -212,6 +269,18 @@ async def test_publish_desk_packet_uses_reliable_topic() -> None:
     assert published["reliable"] is True
     assert published["topic"] == DESK_TOPIC
     assert published["payload"] == b'{"type":"transcript","role":"user","text":"hi"}'
+
+
+@pytest.mark.asyncio
+async def test_desk_http_post_failures_log_warning(monkeypatch, caplog) -> None:
+    def _boom(_packet):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("desk_events._post_desk_event_sync", _boom)
+    with caplog.at_level("WARNING", logger="desk"):
+        await post_desk_event_http({"type": "transcript", "role": "user", "text": "hi"})
+    assert any("desk http post failed" in rec.message for rec in caplog.records)
+    assert not any(rec.levelname == "DEBUG" for rec in caplog.records)
 
 
 def test_agent_publishes_desk_feed_for_every_ava_room() -> None:

@@ -15,6 +15,16 @@ from datetime import date, datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
+from booking_state import BookingState
+from date_context import DateContext, refresh_date_context
+from grounding import (
+    GateResult,
+    SpeakableFacts,
+    gate_utterance,
+    ingest_availability,
+    ingest_book_result,
+    ingest_date_resolution,
+)
 from persona import BRANCHES, DEFAULT_BRANCH_ID, get_branch
 from phrase_pools import ACKS, BARGE_IN_RESUME, CLOSINGS, OPENINGS, pick_from_pool
 
@@ -220,6 +230,7 @@ class CallState:
     offered_branch: str | None = None
     bot_ask_count: int = 0
     kill_switch: bool = False
+    greet_on_enter: bool = True
     used_phrases: dict[str, list[str]] = field(default_factory=dict)
     stock_phrases_used: list[str] = field(default_factory=list)
     last_dispatch_trace: Any | None = None
@@ -227,9 +238,25 @@ class CallState:
     last_book_result: dict[str, Any] | None = None
     preferred_clinician: str | None = None
     today: date = field(default_factory=sydney_today)
+    date_context: DateContext = field(init=False)
+    speakable: SpeakableFacts = field(default_factory=SpeakableFacts)
+    booking_flow: BookingState = field(default_factory=BookingState)
+    grounding_violations: int = 0
     barge_in_pending: bool = False
     last_barge_in_resume: str | None = None
     phrase_rng: random.Random = field(default_factory=random.Random)
+
+    def __post_init__(self) -> None:
+        self.date_context = refresh_date_context(today=self.today)
+        self.speakable.allow_calendar(self.today)
+
+    def refresh_dates(self, today: date | None = None) -> DateContext:
+        """Recompute Sydney DateContext every turn."""
+        if today is not None:
+            self.today = today
+        self.date_context = refresh_date_context(today=self.today)
+        self.speakable.allow_calendar(self.today)
+        return self.date_context
 
     @property
     def tomorrow(self) -> date:
@@ -245,24 +272,54 @@ class CallState:
 
     def remember_availability(self, result: Mapping[str, Any]) -> None:
         """Keep the last diary result so a TPM recovery can offer times, not re-search."""
+        ingest_availability(self.speakable, result, today=self.today)
         slots = list(result.get("slots") or []) if result.get("ok") else []
         self.last_availability_slots = slots[:8]
         if slots:
             self.proposed_slot = slots[0].get("slot_id") or self.proposed_slot
+            first = slots[0] if isinstance(slots[0], dict) else {}
+            clinician = str(first.get("clinician") or "").strip()
+            if clinician:
+                self.speakable.dentist_display_name = clinician
+        self.booking_flow.offer_slots(slots if result.get("ok") else [])
 
     def record_book_result(self, result: Mapping[str, Any]) -> dict[str, Any]:
         """Gate verbal confirmation on the last book_appointment result."""
         gated = apply_confirmation_gate(result)
         self.last_book_result = gated
+        ingest_book_result(self.speakable, gated, today=self.today)
         if booking_is_locked(gated):
             slot_id = gated.get("slot_id")
             if slot_id:
                 self.confirmed_slot = str(slot_id)
             self.intent = "booked"
+            self.booking_flow.confirm(str(slot_id) if slot_id else None)
+        else:
+            reason = str(gated.get("reason") or "not_locked")
+            callback = None
+            if self.may_offer_callback():
+                callback = {"action": "take_message", "reason": reason}
+            self.booking_flow.fail(reason, callback_task=callback)
+            self.speakable.confirm_allowed = False
+        return gated
+
+    def apply_date_resolution(self, result: Mapping[str, Any]) -> None:
+        ingest_date_resolution(self.speakable, result, today=self.today)
+
+    def gate_speech(self, text: str) -> GateResult:
+        gated = gate_utterance(text, self.speakable)
+        if gated.suppressed:
+            self.grounding_violations += 1
         return gated
 
     def may_confirm_booking(self) -> bool:
-        return booking_is_locked(self.last_book_result)
+        return booking_is_locked(self.last_book_result) or (
+            self.booking_flow.confirm_language_allowed
+        )
+
+    def may_offer_callback(self) -> bool:
+        """URGENT / EMERGENCY never offer a callback — stay on the line or 000."""
+        return self.urgency_level not in {"same_day", "emergency_000"}
 
     def may_offer_times(self) -> bool:
         return bool(self.last_availability_slots)
@@ -288,10 +345,11 @@ class CallState:
     def register_mobile(self, raw: str | None) -> dict[str, Any]:
         """Store a valid mobile, or increment the hard ask counter."""
         if self.should_stop_asking("mobile"):
+            offer_callback = self.may_offer_callback()
             return {
                 "ok": False,
                 "stop_asking": True,
-                "offer_callback": True,
+                "offer_callback": offer_callback,
                 "attempts": self.ask_counts.get("mobile", MAX_ASKS),
                 "note": (
                     "Do not ask for the mobile again. Offer a callback. "
@@ -308,10 +366,11 @@ class CallState:
             return {"ok": True, "mobile": self.caller_mobile, "stored": True}
 
         result = self.record_ask("mobile")
+        offer_callback = result.offer_callback and self.may_offer_callback()
         return {
             "ok": False,
             "stop_asking": result.stop_asking,
-            "offer_callback": result.offer_callback,
+            "offer_callback": offer_callback,
             "attempts": result.count,
             "remaining": max(0, MAX_ASKS - result.count),
             "note": (
@@ -436,11 +495,20 @@ class CallState:
             f"- last_book_confirmed: {bool((self.last_book_result or {}).get('confirmed'))}\n"
             f"- last_book_reason: {(self.last_book_result or {}).get('reason') or 'none'}\n"
             f"- booking_locked: {self.may_confirm_booking()}\n"
+            f"- booking_phase: {self.booking_flow.phase.value}\n"
+            f"- session_slot_ids: {len(self.booking_flow.session_slot_ids)}\n"
+            f"- grounding_violations: {self.grounding_violations}\n"
+            f"- speakable_dentist: {self.speakable.dentist_display_name or 'none'}\n"
+            f"- availability_status: {self.speakable.availability_status or 'none'}\n"
+            f"- date_resolved: {self.speakable.date_resolved}\n"
+            f"- confirm_allowed: {self.speakable.confirm_allowed}\n"
+            f"{self.date_context.prompt_line()}\n"
             f"- urgency_level: {self.urgency_level}\n"
             f"- escalation_flag: {self.escalation_flag}\n"
             f"- turn_count: {self.turn_count}\n"
             f"- mobile_asks: {mobile_asks}/{MAX_ASKS}; "
-            f"stop_asking_mobile={stop_mobile}; offer_callback={stop_mobile}\n"
+            f"stop_asking_mobile={stop_mobile}; "
+            f"offer_callback={stop_mobile and self.may_offer_callback()}\n"
             f"- offered_branch: {offered}\n"
             f"- bot_ask_count: {self.bot_ask_count} "
             "(deflect once, then be honest)\n"
@@ -448,7 +516,9 @@ class CallState:
             f"- used_acks: {self.used_phrases.get('ack', [])}\n"
             f"- barge_in_resume: {self.last_barge_in_resume or 'none'}\n"
             "- If urgency_level is emergency_000: do not book. Tell them triple zero "
-            "or Shellharbour / Wollongong Hospital emergency.\n"
+            "or Shellharbour / Wollongong Hospital emergency. Do not offer a callback.\n"
+            "- If urgency_level is same_day: this is URGENT. Do not offer a callback. "
+            "Find a slot or transfer.\n"
             "- If offered_branch is set: offer that clinic warmly. Never a menu.\n"
             "- If stop_asking_mobile: do not ask for the mobile again.\n"
             "- If barge_in_resume is set: start with that phrase. Never restart the "
@@ -459,10 +529,13 @@ class CallState:
             "- If last_offer_slots is set: offer those times. Do not search again "
             "unless they ask for a different day or dentist.\n"
             "- Never say you're all set, confirmed, booked, or similar unless "
-            "booking_locked is true (last book_appointment returned ok true and "
-            "confirmed true). If it failed (slot_gone / invalid_slot_id), say "
-            "the time is not locked yet.\n"
+            "booking_locked is true AND booking_phase is CONFIRMED. If it failed "
+            "(slot_gone / invalid_slot_id), say the time is not locked yet.\n"
             "- If preferred_clinician is set, pass it to check_availability.\n"
+            "- Use resolve_date_phrase for any day that is not today/tomorrow. "
+            "If it is ambiguous, ask the caller. Never do date maths yourself.\n"
+            "- Speak date, time, and dentist only from SpeakableFacts / last tool "
+            "results. If availability_status is UNKNOWN, never say chockers.\n"
             "- Use the Sydney today/tomorrow lines above. Do not guess the weekday."
         )
 
@@ -496,6 +569,9 @@ class CallState:
             "urgency_level": self.urgency_level,
             "escalation_flag": self.escalation_flag,
             "turn_count": self.turn_count,
+            "booking_phase": self.booking_flow.phase.value,
+            "grounding_violations": self.grounding_violations,
+            "availability_status": self.speakable.availability_status,
             "ask_counts": dict(self.ask_counts),
             "offered_branch": self.offered_branch,
             "bot_ask_count": self.bot_ask_count,

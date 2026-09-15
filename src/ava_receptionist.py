@@ -6,23 +6,41 @@ import asyncio
 import inspect
 import logging
 import os
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterable, Awaitable, Callable, Mapping
 from typing import Any
 
 from livekit import api
-from livekit.agents import Agent, RunContext, function_tool, get_job_context
+from livekit.agents import (
+    Agent,
+    ModelSettings,
+    RunContext,
+    function_tool,
+    get_job_context,
+)
 from livekit.plugins import openai
 from openai.types.beta.realtime.session import TurnDetection
 
-from booking import BookingProvider, invalid_slot_id_result, is_canonical_slot_id
+from booking import (
+    BookingProvider,
+    empty_tool_args_result,
+    invalid_slot_id_result,
+    is_canonical_slot_id,
+)
 from call_log import CallLog
 from call_state import CallState
+from date_context import resolve_date_phrase as resolve_date_phrase_fn
 from desk_events import activity_packet_from_result, schedule_desk_publish
 from filler_ladder import FillerLadder, SessionSpeaker
+from grounding import grounding_violation_packet
 from persona import ava_instructions, get_branch, quote_fee, resolve_tool_branch
 from phrase_pools import STAGE_1
 from realtime_hygiene import maybe_trim_realtime_context
 from sip_utils import find_sip_participant
+
+try:
+    from livekit.agents import StopResponse
+except ImportError:  # pragma: no cover
+    StopResponse = None  # type: ignore[misc, assignment]
 
 logger = logging.getLogger("ava")
 
@@ -33,6 +51,12 @@ AVA_DEFAULT_VOICE = "marin"
 AVA_VAD_SILENCE_MS = 500
 AVA_SPEECH_SPEED = 0.9
 AVA_TEMPERATURE = 0.95
+
+EMERGENCY_000_SCRIPT = (
+    "This sounds like it needs emergency care. Please hang up and call triple zero, "
+    "or get straight to Shellharbour or Wollongong Hospital emergency. "
+    "I can't book this one."
+)
 
 DeskNotify = Callable[[dict[str, Any]], Awaitable[None] | None]
 
@@ -176,10 +200,67 @@ class AvaReceptionist(Agent):
             )
         self._notify_desk(name, arguments or {}, payload)
 
+    def _gate_speech(self, text: str) -> str:
+        gated = self.state.gate_speech(text)
+        if gated.suppressed:
+            logger.warning("%s", gated.log_line)
+            packet = grounding_violation_packet(
+                gated,
+                count=self.state.grounding_violations,
+                branch=self.state.branch,
+            )
+            if self.on_desk_event is not None:
+                maybe = self.on_desk_event(packet)
+                if inspect.isawaitable(maybe):
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        return gated.spoken
+                    task = loop.create_task(maybe)
+                    self._desk_tasks.add(task)
+                    task.add_done_callback(self._desk_tasks.discard)
+            else:
+                schedule_desk_publish(self._job_room(), packet)
+        return gated.spoken
+
+    async def tts_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterable[Any]:
+        """Pipeline pre-TTS intercept. Docs: https://docs.livekit.io/agents/logic/nodes/"""
+
+        async def _gated() -> AsyncIterable[str]:
+            chunks: list[str] = []
+            async for chunk in text:
+                chunks.append(chunk if isinstance(chunk, str) else str(chunk))
+            yield self._gate_speech("".join(chunks))
+
+        async for frame in Agent.default.tts_node(self, _gated(), model_settings):
+            yield frame
+
+    async def transcription_node(
+        self, text: AsyncIterable[str], model_settings: ModelSettings
+    ) -> AsyncIterable[str]:
+        """Realtime transcript rewrite. Audio may already be in flight; interrupt + say."""
+        del model_settings
+        chunks: list[str] = []
+        async for chunk in text:
+            chunks.append(chunk if isinstance(chunk, str) else str(chunk))
+        full = "".join(chunks)
+        spoken = self._gate_speech(full)
+        if spoken != full:
+            try:
+                interrupt = getattr(self.session, "interrupt", None)
+                if callable(interrupt):
+                    interrupt()
+                self.session.say(spoken)
+            except Exception:
+                logger.exception("grounding interrupt/say failed")
+        yield spoken
+
     async def _cover(self, context: RunContext) -> None:
         """Stage-1 filler only. Prefer _dispatch_with_ladder so audio precedes the network."""
         try:
-            speaker = SessionSpeaker(context.session)
+            speaker = SessionSpeaker(context.session, gate=self._gate_speech)
             line = self.state.pick_phrase("stage_1", STAGE_1)
             await speaker.utter(line)
         except Exception:
@@ -191,7 +272,7 @@ class AvaReceptionist(Agent):
         factory: Any,
     ) -> dict[str, Any]:
         """Speak stage-1 audio, then run the tool. Ladder covers the wait."""
-        speaker = SessionSpeaker(context.session)
+        speaker = SessionSpeaker(context.session, gate=self._gate_speech)
         ladder = FillerLadder(self.state, speaker=speaker, booking=self.booking)
         self._active_ladder = ladder
         if self.ambient is not None:
@@ -218,12 +299,22 @@ class AvaReceptionist(Agent):
 
     async def on_user_turn_completed(self, turn_ctx: Any, new_message: Any) -> None:
         self.state.turn_count += 1
+        self.state.refresh_dates()
         text = (getattr(new_message, "text_content", None) or "").strip()
         self.state.observe_user_text(text)
         if self.call_log is not None and text:
             self.call_log.add_turn(role="user", content=text)
         if self._active_ladder is not None:
             await self._active_ladder.on_caller_speech()
+        if self.state.urgency_level == "emergency_000":
+            try:
+                await self.session.say(EMERGENCY_000_SCRIPT, allow_interruptions=False)
+            except TypeError:
+                await self.session.say(EMERGENCY_000_SCRIPT)
+            except Exception:
+                logger.exception("emergency 000 script failed")
+            if StopResponse is not None:
+                raise StopResponse()
         try:
             await self.update_instructions(
                 ava_instructions(self.state.branch, self.state.prompt_block())
@@ -283,30 +374,61 @@ class AvaReceptionist(Agent):
         }
 
     async def on_enter(self) -> None:
-        if not self.state.kill_switch:
-            return
-        self.state.escalation_flag = True
-        self.state.intent = "kill_switch"
-        try:
-            await self.session.generate_reply(
-                instructions=(
-                    f"Kill-switch is on. Warm one sentence: you're putting them "
-                    f"through to the team at {self.state.branch_name} now. Then stop."
-                )
-            )
-        except Exception:
-            logger.exception("kill-switch greeting failed")
-        result = await self._do_transfer(self.state.branch, "kill_switch")
-        if not result.get("ok"):
+        if self.state.kill_switch:
+            self.state.escalation_flag = True
+            self.state.intent = "kill_switch"
             try:
                 await self.session.generate_reply(
                     instructions=(
-                        "The transfer didn't go through. Stay warm. Offer to take "
-                        "a message and a callback. Do not mention kill-switch."
+                        f"Kill-switch is on. Warm one sentence: you're putting them "
+                        f"through to the team at {self.state.branch_name} now. Then stop."
                     )
                 )
             except Exception:
-                logger.exception("kill-switch fallback speech failed")
+                logger.exception("kill-switch greeting failed")
+            result = await self._do_transfer(self.state.branch, "kill_switch")
+            if not result.get("ok"):
+                try:
+                    await self.session.generate_reply(
+                        instructions=(
+                            "The transfer didn't go through. Stay warm. Offer to take "
+                            "a message and a callback. Do not mention kill-switch."
+                        )
+                    )
+                except Exception:
+                    logger.exception("kill-switch fallback speech failed")
+            return
+        if not self.state.greet_on_enter:
+            return
+        try:
+            await self.session.generate_reply(
+                instructions=inbound_greeting_instructions(self.state.branch)
+            )
+        except Exception:
+            logger.exception("session-start greeting failed")
+
+    @function_tool()
+    async def resolve_date_phrase(
+        self, context: RunContext, phrase: str
+    ) -> dict[str, Any]:
+        """Resolve a spoken date in Australia/Sydney. Never do date maths yourself.
+
+        Call this before check_availability when they name a day. If it comes
+        back ambiguous, ask them which day they mean.
+
+        Args:
+            phrase: What they said — next Tuesday, this week, tomorrow, 2026-09-22.
+        """
+        del context
+        if not (phrase or "").strip():
+            result = empty_tool_args_result("phrase")
+            self._log_tool("resolve_date_phrase", result, {"phrase": phrase})
+            return result
+        self.state.refresh_dates()
+        result = resolve_date_phrase_fn(phrase, today=self.state.today)
+        self.state.apply_date_resolution(result)
+        self._log_tool("resolve_date_phrase", result, {"phrase": phrase})
+        return result
 
     @function_tool()
     async def check_availability(
@@ -333,6 +455,8 @@ class AvaReceptionist(Agent):
         """
 
         async def _run() -> dict[str, Any]:
+            if not (appointment_type or "").strip() or not (date_range or "").strip():
+                return empty_tool_args_result("appointment_type", "date_range")
             clinic_id = self._select_branch(branch)
             if not self.state.may_book():
                 return {
@@ -355,15 +479,33 @@ class AvaReceptionist(Agent):
                 clinician=chosen,
             )
             self.state.remember_availability(result)
-            if result.get("ok") and not result.get("slots"):
+            if str(result.get("status") or "") == "UNKNOWN":
                 result = dict(result)
                 result.setdefault(
                     "note",
                     (
-                        "No diary slots to offer. Do not invent a time. "
-                        "Do not say half past two or any clock time."
+                        "Diary status is UNKNOWN. Do not say chockers or packed. "
+                        "Do not invent a time."
                     ),
                 )
+            elif result.get("ok") and not result.get("slots"):
+                result = dict(result)
+                if result.get("may_say_chockers"):
+                    result.setdefault(
+                        "note",
+                        (
+                            "No diary slots in this range (OK). You may say chockers. "
+                            "Do not invent a time."
+                        ),
+                    )
+                else:
+                    result.setdefault(
+                        "note",
+                        (
+                            "No diary slots to offer. Do not invent a time. "
+                            "Do not say half past two or any clock time."
+                        ),
+                    )
             return result
 
         result = await self._dispatch_with_ladder(context, _run)
@@ -407,6 +549,8 @@ class AvaReceptionist(Agent):
         """
 
         async def _run() -> dict[str, Any]:
+            if not (slot_id or "").strip() or not (reason or "").strip():
+                return empty_tool_args_result("slot_id", "reason")
             if not self.state.may_book():
                 return {
                     "ok": False,
@@ -416,6 +560,12 @@ class AvaReceptionist(Agent):
                 }
             if not is_canonical_slot_id(slot_id):
                 return invalid_slot_id_result(slot_id)
+            selected = self.state.booking_flow.select_slot(slot_id)
+            if not selected.get("ok"):
+                return selected
+            held = self.state.booking_flow.hold(slot_id)
+            if not held.get("ok"):
+                return held
             if name:
                 self.state.caller_name = name
             mobile_result = self.state.register_mobile(
@@ -640,6 +790,19 @@ class AvaReceptionist(Agent):
             reason: Why the call is ending, e.g. done, goodbye, kill_switch.
         """
         self.state.intent = "end"
+        blocked = self.state.booking_flow.end_call_guard()
+        if not blocked.get("ok"):
+            self._log_tool("end_call", blocked, {"reason": reason})
+            try:
+                await context.session.generate_reply(
+                    instructions=(
+                        "Do not hang up. The booking is not locked yet. "
+                        "Say you'll finish it or offer another time. Warm, one sentence."
+                    )
+                )
+            except Exception:
+                logger.exception("end_call blocked speech failed")
+            return blocked
         try:
             await context.session.generate_reply(
                 instructions=(

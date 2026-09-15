@@ -23,6 +23,7 @@ from booking import (
     invalid_slot_id_result,
     is_canonical_slot_id,
     parse_date_range,
+    stamp_availability_status,
 )
 from persona import BRANCHES
 
@@ -204,7 +205,9 @@ class CachedBookingProvider:
                         "No slots for that dentist in this range. Do not invent a time. "
                         "Offer another dentist or another day."
                     )
-                return payload
+                return stamp_availability_status(
+                    payload, requested_from=start, requested_to=end
+                )
 
         self.live_checks += 1
         result = await self.inner.check_availability(
@@ -219,7 +222,35 @@ class CachedBookingProvider:
         payload["cache_age_s"] = None
         if payload.get("ok"):
             payload["slots"] = list(payload.get("slots") or [])[:AGENT_SLOT_LIMIT]
-        return payload
+            return stamp_availability_status(
+                payload, requested_from=start, requested_to=end
+            )
+        overlap: list[dict[str, Any]] = []
+        covered_from = None
+        covered_to = None
+        if window is not None:
+            overlap_start = max(start, window.date_from)
+            overlap_end = min(end, window.date_to)
+            if overlap_start <= overlap_end:
+                overlap = filter_slots_by_clinician(
+                    window.slots_in_range(overlap_start, overlap_end), clinician
+                )
+                covered_from = overlap_start
+                covered_to = overlap_end
+        if overlap:
+            payload["ok"] = True
+            payload["slots"] = overlap if limit is None else overlap[:limit]
+            payload["cached"] = True
+            return stamp_availability_status(
+                payload,
+                requested_from=start,
+                requested_to=end,
+                covered_from=covered_from,
+                covered_to=covered_to,
+            )
+        return stamp_availability_status(
+            payload, requested_from=start, requested_to=end
+        )
 
     def _lookup_slot(self, slot_id: str) -> Any | None:
         provider: Any = self.inner

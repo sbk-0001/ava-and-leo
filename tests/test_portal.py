@@ -127,6 +127,9 @@ def test_portal_has_live_call_panel() -> None:
     assert "live-activity" in js
     assert "call-+" not in js or "sip" in js.lower()
     assert "subscribeDeskStream" in js
+    assert "grounding-count" in html
+    assert "grounding_violation" in js
+    assert "Grounding violations" in html
 
 
 def test_desk_http_bus_posts_reach_subscribers() -> None:

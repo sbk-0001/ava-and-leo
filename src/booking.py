@@ -183,6 +183,89 @@ def invalid_slot_id_result(slot_id: str) -> dict[str, Any]:
     }
 
 
+UNKNOWN_REASONS = frozenset(
+    {
+        "timeout",
+        "rate_limit",
+        "rate_limit_exceeded",
+        "429",
+        "unavailable",
+        "practice_software_unavailable",
+        "zavy360_unavailable",
+        "zavy360_error",
+        "zavy360_http_missing",
+    }
+)
+
+
+def stamp_availability_status(
+    payload: dict[str, Any],
+    *,
+    requested_from: str,
+    requested_to: str,
+    covered_from: str | None = None,
+    covered_to: str | None = None,
+) -> dict[str, Any]:
+    """Three-state availability: OK | PARTIAL | UNKNOWN, plus coverage."""
+    result = dict(payload)
+    reason = str(result.get("reason") or "").lower()
+    covered_from = covered_from or str(result.get("date_from") or requested_from)
+    covered_to = covered_to or str(result.get("date_to") or requested_to)
+    unknown = (not result.get("ok")) or reason in UNKNOWN_REASONS or "429" in reason
+    if unknown:
+        status = "UNKNOWN"
+        complete = False
+        if not result.get("ok"):
+            result.setdefault("slots", [])
+    elif covered_from > requested_from or covered_to < requested_to:
+        status = "PARTIAL"
+        complete = False
+    else:
+        status = "OK"
+        complete = True
+    result["status"] = status
+    result["coverage"] = {
+        "requested_from": requested_from,
+        "requested_to": requested_to,
+        "covered_from": covered_from,
+        "covered_to": covered_to,
+        "complete": complete,
+    }
+    result["may_say_chockers"] = status == "OK" and not list(result.get("slots") or [])
+    if status == "UNKNOWN":
+        result.setdefault(
+            "note",
+            "Diary status is UNKNOWN. Do not say chockers, packed, or empty. "
+            "Do not invent a time. Offer to try again, take a message, or transfer.",
+        )
+    elif status == "PARTIAL":
+        result.setdefault(
+            "note",
+            "Coverage is PARTIAL. Only speak times from slots. "
+            "Do not characterise the rest of the week.",
+        )
+    elif result.get("may_say_chockers"):
+        result.setdefault(
+            "note",
+            "No diary slots in this range (OK + empty). You may say chockers. "
+            "Do not invent a time.",
+        )
+    return result
+
+
+def may_say_chockers(result: Mapping[str, Any]) -> bool:
+    return bool(result.get("may_say_chockers"))
+
+
+def empty_tool_args_result(*fields: str) -> dict[str, Any]:
+    named = ", ".join(fields) or "arguments"
+    return {
+        "ok": False,
+        "reason": "empty_tool_args",
+        "note": f"Missing {named}. Ask the caller once, then call the tool again.",
+    }
+
+
 def _norm_clinician(value: str) -> str:
     text = re.sub(r"\s+", " ", value).strip().lower()
     return re.sub(r"^dr\.?\s+", "", text)
@@ -271,7 +354,12 @@ class MemoryBookingProvider:
         limit: int | None = 12,
     ) -> dict[str, Any]:
         if self.client.mode == "disconnected":
-            return self.client._unavailable("check_availability")
+            start, end = parse_date_range(date_range)
+            return stamp_availability_status(
+                self.client._unavailable("check_availability"),
+                requested_from=start,
+                requested_to=end,
+            )
         start, end = parse_date_range(date_range)
         diary = await self.client.list_diary(
             branch_id=get_branch(branch).id, date_from=start, date_to=end
@@ -301,7 +389,9 @@ class MemoryBookingProvider:
                 "No slots for that dentist in this range. Do not invent a time. "
                 "Offer another dentist or another day."
             )
-        return payload
+        return stamp_availability_status(
+            payload, requested_from=start, requested_to=end
+        )
 
     async def book_appointment(
         self,
@@ -490,7 +580,7 @@ class Zavy360BookingProvider:
         if limit is not None and isinstance(slots, list):
             result = dict(result)
             result["slots"] = slots[:limit]
-        return result
+        return stamp_availability_status(result, requested_from=start, requested_to=end)
 
     async def book_appointment(
         self,
@@ -596,9 +686,13 @@ class TimeoutBookingProvider:
             }
 
     async def check_availability(self, **kwargs: Any) -> dict[str, Any]:
-        return await self._call(
+        result = await self._call(
             "check_availability", lambda: self.inner.check_availability(**kwargs)
         )
+        start, end = parse_date_range(str(kwargs.get("date_range") or ""))
+        if result.get("status"):
+            return result
+        return stamp_availability_status(result, requested_from=start, requested_to=end)
 
     async def book_appointment(self, **kwargs: Any) -> dict[str, Any]:
         return await self._call(
@@ -649,15 +743,20 @@ class ToolPacingProvider:
     async def check_availability(self, **kwargs: Any) -> dict[str, Any]:
         if self.lookup_hang_s > 0:
             await asyncio.sleep(self.lookup_hang_s)
-            return {
-                "ok": False,
-                "reason": "timeout",
-                "action": "check_availability",
-                "note": (
-                    "The diary did not come back. Stay in character. Do not invent "
-                    "a slot. Offer to take a message or transfer."
-                ),
-            }
+            start, end = parse_date_range(str(kwargs.get("date_range") or ""))
+            return stamp_availability_status(
+                {
+                    "ok": False,
+                    "reason": "timeout",
+                    "action": "check_availability",
+                    "note": (
+                        "The diary did not come back. Stay in character. Do not invent "
+                        "a slot. Offer to take a message or transfer."
+                    ),
+                },
+                requested_from=start,
+                requested_to=end,
+            )
         if self.lookup_delay_s > 0:
             await asyncio.sleep(self.lookup_delay_s)
         return await self.inner.check_availability(**kwargs)

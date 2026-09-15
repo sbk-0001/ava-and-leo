@@ -49,6 +49,7 @@ def test_required_tools_are_present() -> None:
         "take_message",
         "transfer_to_human",
         "end_call",
+        "resolve_date_phrase",
     ):
         assert f"async def {name}" in source, name
     assert "TransferSIPParticipantRequest" in source
@@ -65,6 +66,9 @@ def test_required_tools_are_present() -> None:
     assert "exact slot_id" in book
     assert "invalid_slot_id" in book
     assert "_notify_desk" in inspect.getsource(AvaReceptionist)
+    assert "transcription_node" in inspect.getsource(AvaReceptionist)
+    assert "tts_node" in inspect.getsource(AvaReceptionist)
+    assert "resolve_date_phrase" in inspect.getsource(AvaReceptionist)
 
 
 def test_inbound_greeting_is_the_mapped_branch() -> None:
@@ -143,11 +147,15 @@ def test_agent_builds_call_state_before_speech() -> None:
     from agent import my_agent
 
     source = inspect.getsource(my_agent)
-    assert "CallState(branch=branch_id" in source
+    assert "CallState(" in source
+    assert "branch=branch_id" in source
     assert "call_state ready before speech" in source
     assert "today=%s" in source
     assert "kill_switch" in source
-    assert "inbound_greeting_instructions(call_state.branch)" in source
+    assert "greet_on_enter" in source
+    assert "assert_sip_host" in source
+    assert "assert_live_openai_key" in source
+    assert "RateLimitCircuitBreaker" in source
     assert "is_rate_limit_error" in source
     assert "RateLimitRecovery" in source
     assert "CachedBookingProvider" in source
@@ -190,6 +198,11 @@ async def test_practice_tools_notify_desk_including_booking_failures(
 
     found = await ava.lookup_patient(dummy, mobile="0412222333")
     assert found["ok"] is True
+    available = await ava.check_availability(
+        dummy, appointment_type="check-up", date_range="2026-09-16"
+    )
+    assert available["ok"] is True
+    assert available["status"] == "OK"
     booked = await ava.book_appointment(
         dummy,
         slot_id="slot_shellharbour_2026-09-16_0930_dr-mohit-tolani",
@@ -272,6 +285,9 @@ async def test_book_appointment_slot_gone_is_not_verbally_confirmed(
         return await factory()
 
     monkeypatch.setattr(AvaReceptionist, "_dispatch_with_ladder", _run_only)
+    ava.state.booking_flow.offer_slots(
+        [{"slot_id": "slot_shellharbour_2026-09-15_1430_dr-mohit-tolani"}]
+    )
     result = await ava.book_appointment(
         SimpleNamespace(),
         slot_id="slot_shellharbour_2026-09-15_1430_dr-mohit-tolani",
@@ -314,3 +330,60 @@ async def test_check_availability_uses_preferred_clinician(monkeypatch) -> None:
         "mohit" in (slot.get("clinician") or "").lower() for slot in result["slots"]
     )
     assert ava.state.may_offer_times() is True
+    assert result["status"] == "OK"
+
+
+@pytest.mark.asyncio
+async def test_empty_tool_args_are_rejected(monkeypatch) -> None:
+    from booking import MemoryBookingProvider
+    from call_state import CallState
+    from practice import PracticeClient
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    ava = AvaReceptionist(
+        state=CallState(branch="shellharbour", today=date(2026, 9, 15)),
+        booking=MemoryBookingProvider(PracticeClient(mode="mock")),
+    )
+
+    async def _run_only(self, context, factory):
+        return await factory()
+
+    monkeypatch.setattr(AvaReceptionist, "_dispatch_with_ladder", _run_only)
+    empty = await ava.check_availability(
+        SimpleNamespace(), appointment_type="  ", date_range=""
+    )
+    assert empty["reason"] == "empty_tool_args"
+    dated = await ava.resolve_date_phrase(SimpleNamespace(), phrase="   ")
+    assert dated["reason"] == "empty_tool_args"
+
+
+@pytest.mark.asyncio
+async def test_resolve_date_phrase_tool_and_end_call_block(monkeypatch) -> None:
+    from booking import MemoryBookingProvider
+    from call_state import CallState
+    from practice import PracticeClient
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    ava = AvaReceptionist(
+        state=CallState(branch="shellharbour", today=date(2026, 9, 14)),
+        booking=MemoryBookingProvider(PracticeClient(mode="mock")),
+    )
+    hit = await ava.resolve_date_phrase(SimpleNamespace(), phrase="next Friday")
+    assert hit["ambiguous"] is True
+    assert ava.state.speakable.date_resolved is False
+
+    ava.state.booking_flow.offer_slots(
+        [{"slot_id": "slot_shellharbour_2026-09-16_1110_dr-mohit-tolani"}]
+    )
+    ava.state.booking_flow.select_slot(
+        "slot_shellharbour_2026-09-16_1110_dr-mohit-tolani"
+    )
+    blocked = await ava.end_call(SimpleNamespace(), reason="done")
+    assert blocked["reason"] == "booking_in_progress"
+
+
+def test_on_enter_greets_web_and_sip() -> None:
+    source = inspect.getsource(AvaReceptionist.on_enter)
+    assert "inbound_greeting_instructions" in source
+    assert "greet_on_enter" in source
+    assert "EMERGENCY_000_SCRIPT" in inspect.getsource(AvaReceptionist)

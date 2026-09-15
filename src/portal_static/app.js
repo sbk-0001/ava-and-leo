@@ -5,6 +5,7 @@ const state = {
   room: null,
   deskSource: null,
   seenDeskIds: new Set(),
+  groundingViolations: 0,
 };
 
 const DESK_TOPIC = "ava.desk";
@@ -287,6 +288,20 @@ async function maybeRefreshDiary(packet) {
   await loadDiary();
 }
 
+function renderGrounding(packet) {
+  const count = Number(packet.payload?.count || state.groundingViolations + 1);
+  state.groundingViolations = count;
+  const el = $("grounding-count");
+  if (el) el.textContent = `Grounding violations: ${count}`;
+  appendLiveLine(
+    "live-activity",
+    "live-line activity",
+    `<div class="who">GROUNDING_VIOLATION</div><div class="fields">${escapeHtml(
+      (packet.payload?.violations || []).join(", ")
+    )}</div>`
+  );
+}
+
 function handleDeskPacket(packet) {
   if (!packet || typeof packet !== "object") return;
   if (packet.id) {
@@ -297,6 +312,10 @@ function handleDeskPacket(packet) {
     const hint = $("live-call-hint");
     const channel = packet.channel === "sip" ? "Inbound phone" : "Live call";
     hint.textContent = `${channel} · ${packet.room}`;
+  }
+  if (packet.type === "grounding_violation") {
+    renderGrounding(packet);
+    return;
   }
   if (packet.type === "transcript" && packet.text) {
     renderTranscript(packet);
@@ -341,7 +360,7 @@ function subscribeDeskFeed(room) {
     } catch {
       return;
     }
-    if (packet.type !== "transcript" && packet.type !== "activity") return;
+    if (packet.type !== "transcript" && packet.type !== "activity" && packet.type !== "grounding_violation") return;
     handleDeskPacket(packet);
   });
 }

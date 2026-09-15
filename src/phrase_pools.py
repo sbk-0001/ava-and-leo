@@ -45,6 +45,20 @@ STAGE_5 = (
     "diary's stuck, so I'll leave a note for the team to call you back rather than guess a time",
 )
 
+# ERROR path — 429 / timeout. Never invent availability.
+STAGE_ERROR = (
+    "this thing's having a sook — bear with me",
+    "yeah the screen's not playing, hang on",
+    "sorry, it's thrown a wobbly, two secs",
+)
+
+# EMPTY / UNKNOWN path — do not say chockers.
+STAGE_EMPTY = (
+    "nup, not getting a clean look at that yet",
+    "hmm, I'm not seeing a clear run of times",
+    "yeah I don't wanna guess, let me stay on it",
+)
+
 STAGE_POOLS: dict[int, tuple[str, ...]] = {
     1: STAGE_1,
     2: STAGE_2,
@@ -107,6 +121,8 @@ STOCK_POOLS: dict[str, tuple[str, ...]] = {
     "stage_3": STAGE_3,
     "stage_4": STAGE_4,
     "stage_5": STAGE_5,
+    "stage_error": STAGE_ERROR,
+    "stage_empty": STAGE_EMPTY,
     "ack": ACKS,
     "opening": OPENINGS,
     "closing": CLOSINGS,

@@ -24,9 +24,46 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from call_state import CallState
-from phrase_pools import STAGE_POOLS
+from phrase_pools import STAGE_EMPTY, STAGE_ERROR, STAGE_POOLS
 
 logger = logging.getLogger("ava.filler")
+
+
+def classify_dispatch_path(result: Mapping[str, Any] | None) -> str:
+    """LATENCY | ERROR | EMPTY. UNKNOWN availability is EMPTY, not chockers."""
+    if not isinstance(result, Mapping):
+        return "ERROR"
+    reason = str(result.get("reason") or "").lower()
+    status = str(result.get("status") or "")
+    if _is_rate_limit_payload(result) or reason in {
+        "timeout",
+        "practice_software_unavailable",
+        "zavy360_unavailable",
+        "zavy360_error",
+    }:
+        return "ERROR"
+    if status == "UNKNOWN" or (not result.get("ok") and not result.get("slots")):
+        return "ERROR" if not result.get("ok") else "EMPTY"
+    if result.get("ok") and not list(result.get("slots") or []):
+        return "EMPTY"
+    return "LATENCY"
+
+
+def _is_rate_limit_payload(result: Mapping[str, Any] | BaseException | None) -> bool:
+    if result is None:
+        return False
+    if isinstance(result, BaseException):
+        text = str(result).lower()
+        return "429" in text or "rate_limit" in text
+    reason = str(result.get("reason") or "").lower()
+    status = str(result.get("status") or "")
+    return (
+        "429" in reason
+        or "rate_limit" in reason
+        or status == "429"
+        or result.get("http_status") == 429
+    )
+
 
 STAGE_OFFSETS_MS: dict[int, int] = {
     1: 0,
@@ -59,6 +96,9 @@ class DispatchTrace:
     caller_interrupted: bool = False
     finished_word_before_result: bool = False
     fast_path: bool = False
+    path: str = "LATENCY"
+    abandoned_on_429: bool = False
+    retries: int = 0
 
     @property
     def audio_before_dispatch(self) -> bool:
@@ -150,15 +190,19 @@ class SessionSpeaker:
         session: Any,
         *,
         clock: Callable[[], float] | None = None,
+        gate: Callable[[str], str] | None = None,
     ) -> None:
         self.session = session
         self.clock = clock or time.perf_counter
+        self.gate = gate
         self.last_first_audio_ts: float | None = None
         self.last_text: str | None = None
         self.started_at: float | None = None
         self._handle: Any = None
 
     async def utter(self, text: str, *, allow_interruptions: bool = True) -> None:
+        if self.gate is not None:
+            text = self.gate(text)
         self.last_text = text
         self.started_at = self.clock()
         audio_started = asyncio.Event()
@@ -237,9 +281,17 @@ class FillerLadder:
         self.active = False
         self.trace = DispatchTrace()
 
-    def _pick_stage_line(self, stage: int) -> str:
-        pool = STAGE_POOLS[stage]
-        return self.state.pick_phrase(f"stage_{stage}", pool, rng=self.rng)
+    def _pick_stage_line(self, stage: int, *, kind: str = "LATENCY") -> str:
+        if kind == "ERROR":
+            pool = STAGE_ERROR
+            label = "stage_error"
+        elif kind == "EMPTY":
+            pool = STAGE_EMPTY
+            label = "stage_empty"
+        else:
+            pool = STAGE_POOLS[stage]
+            label = f"stage_{stage}"
+        return self.state.pick_phrase(label, pool, rng=self.rng)
 
     def _schedule(self, from_stage: int, *, from_dispatch: bool = False) -> None:
         origin = self.clock()
@@ -255,8 +307,8 @@ class FillerLadder:
         self._pending = pending
         self._cycle += 1
 
-    async def speak_stage(self, stage: int) -> str:
-        line = self._pick_stage_line(stage)
+    async def speak_stage(self, stage: int, *, kind: str = "LATENCY") -> str:
+        line = self._pick_stage_line(stage, kind=kind)
         await self.speaker.utter(line, allow_interruptions=True)
         self.trace.stages_spoken.append(stage)
         self.trace.lines_spoken.append(line)
@@ -270,7 +322,24 @@ class FillerLadder:
         self.trace.caller_interrupted = True
         self._schedule(from_stage=2)
 
+    async def _error_fallback(self) -> dict[str, Any]:
+        if not self.state.may_offer_callback():
+            return {
+                "ok": False,
+                "stage5": True,
+                "fallback": "transfer",
+                "reason": "rate_limit_exceeded",
+                "note": (
+                    "Diary is not usable and a callback is not allowed on this call. "
+                    "Stay on the line. Offer to put them through to a person. "
+                    "Do not invent a slot."
+                ),
+            }
+        return await self._take_message_fallback()
+
     async def _take_message_fallback(self) -> dict[str, Any]:
+        if not self.state.may_offer_callback():
+            return await self._error_fallback()
         payload: dict[str, Any] = {
             "ok": True,
             "stage5": True,
@@ -332,7 +401,17 @@ class FillerLadder:
 
             while True:
                 if tool_task.done():
-                    result = tool_task.result()
+                    try:
+                        result = tool_task.result()
+                    except Exception as exc:
+                        if _is_rate_limit_payload(exc):
+                            result = {
+                                "ok": False,
+                                "reason": "rate_limit_exceeded",
+                                "http_status": 429,
+                            }
+                        else:
+                            raise
                     elapsed = 0.0
                     if self.trace.tool_dispatch_ts is not None:
                         elapsed = self.clock() - self.trace.tool_dispatch_ts
@@ -341,6 +420,17 @@ class FillerLadder:
                     await self.speaker.finish_current_word()
                     self.trace.finished_word_before_result = True
                     self._pending.clear()
+                    if _is_rate_limit_payload(result) and self.trace.retries < 1:
+                        self.trace.abandoned_on_429 = True
+                        self.trace.retries += 1
+                        retry = await factory()
+                        result = retry
+                    self.trace.path = classify_dispatch_path(result)
+                    if _is_rate_limit_payload(result):
+                        self.trace.abandoned_on_429 = True
+                        self.trace.path = "ERROR"
+                        fallback = await self._error_fallback()
+                        return fallback, self.trace
                     return result, self.trace
 
                 if not self._pending:

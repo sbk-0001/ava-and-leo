@@ -239,6 +239,7 @@ class CallState:
     preferred_clinician: str | None = None
     today: date = field(default_factory=sydney_today)
     now: datetime | None = None
+    clock_frozen: bool = False
     date_context: DateContext = field(init=False)
     speakable: SpeakableFacts = field(default_factory=SpeakableFacts)
     booking_flow: BookingState = field(default_factory=BookingState)
@@ -265,10 +266,12 @@ class CallState:
             else:
                 self.now = self.now.astimezone(SYDNEY)
             self.today = self.now.date()
+            self.clock_frozen = True
         elif self.today == live.date():
             self.now = live
         else:
             self.now = datetime.combine(self.today, datetime.min.time(), tzinfo=SYDNEY)
+            self.clock_frozen = True
         self.date_context = refresh_date_context(now=self.now)
         self.speakable.allow_calendar(self.today)
 
@@ -285,10 +288,16 @@ class CallState:
                 now = now.astimezone(SYDNEY)
             self.now = now
             self.today = now.date()
+            self.clock_frozen = True
         elif today is not None:
             self.today = today
             clock = self.now or datetime.now(SYDNEY)
             self.now = datetime.combine(today, clock.timetz().replace(tzinfo=SYDNEY))
+            self.clock_frozen = True
+        elif self.clock_frozen:
+            self.date_context = refresh_date_context(now=self.now)
+            self.speakable.allow_calendar(self.today)
+            return self.date_context
         else:
             self.now = datetime.now(SYDNEY)
             self.today = self.now.date()

@@ -210,7 +210,10 @@ async def test_caller_interrupt_restarts_from_stage_2() -> None:
     result, trace = await task
     assert result["ok"] is True
     assert trace.caller_interrupted is True
-    assert trace.stages_spoken.count(1) == 1
+    assert trace.stages_spoken[0] == 1
+    assert trace.result_cover is True
+    assert trace.stages_spoken[-1] == 1
+    assert 2 in trace.stages_spoken
     assert speaker.spoken[0] in STAGE_1
 
 
@@ -262,10 +265,11 @@ async def test_cached_fast_path_cancels_after_stage_1() -> None:
     elapsed = asyncio.get_event_loop().time() - t0
     assert result["cached"] is True
     assert FAST_PATH_S == 0.3
-    assert trace.stages_spoken == [1]
+    assert trace.stages_spoken[0] == 1
+    assert trace.result_cover is True
+    assert 2 not in trace.stages_spoken
     assert trace.fast_path is True
     assert elapsed < 0.5
-    assert 2 not in trace.stages_spoken
 
 
 @pytest.mark.asyncio

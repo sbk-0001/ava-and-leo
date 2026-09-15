@@ -174,13 +174,28 @@ On outbound, Ava waits for the callee to speak first. On inbound, Ava greets as 
 ## Tests
 
 ```bash
-uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py tests/test_room_options.py tests/test_call_state.py tests/test_booking.py tests/test_instructions.py tests/test_call_log.py tests/test_demo_harness.py tests/test_realtime_hygiene.py tests/test_filler_ladder.py tests/test_availability_cache.py tests/test_phrase_pools.py tests/test_never_silent.py -v
+uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py tests/test_room_options.py tests/test_call_state.py tests/test_booking.py tests/test_instructions.py tests/test_call_log.py tests/test_demo_harness.py tests/test_realtime_hygiene.py tests/test_filler_ladder.py tests/test_availability_cache.py tests/test_phrase_pools.py tests/test_never_silent.py tests/test_never_silent_harness.py tests/test_never_silent_recorder.py -v
 uv run pytest            # includes generic-pipeline evals; needs LIVEKIT_* in CI
 uv run python src/demo_harness.py   # writes demos/thursday/*.md
-uv run python src/never_silent_harness.py  # metrics for 8 never-silent scenarios
+uv run python src/never_silent_harness.py          # offline metrics for 8 owner scenarios
+# Real WAVs (LiveKit room + dispatched ava-and-leo + TTS caller):
+set -a && source .env.local && set +a
+uv run python src/never_silent_harness.py --live --out demos/never-silent
 ```
 
 Thursday demo transcripts (scripted harness, tools are real): [`demos/thursday/`](demos/thursday/).
+
+Never-silent owner recordings (real WAV, not transcripts):
+
+```bash
+# .env.local must include LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY
+set -a && source .env.local && set +a
+uv run python src/never_silent_harness.py --live --out demos/never-silent
+# one scenario: --scenario 01-slow-availability
+# worker already running: --no-spawn-worker
+```
+
+The recorder creates a LiveKit room, dispatches `ava-and-leo`, drives a TTS caller through the eight owner scripts, mixes a local WAV, and starts audio-only room-composite egress when `EGRESS_S3_*` is set. Without secrets it still writes `demos/never-silent/metrics.json` (no fake `{slug}.wav` labels).
 
 ## Layout
 
@@ -199,7 +214,8 @@ src/realtime_hygiene.py              # Realtime context trim + TPM rate-limit re
 src/call_log.py                      # timestamped replayable transcripts
 src/practice.py                      # in-memory diary used by memory provider + portal
 src/demo_harness.py                  # Thursday scenarios without live SIP
-src/never_silent_harness.py          # 8-scenario metrics (+ live audio if secrets exist)
+src/never_silent_harness.py          # 8 owner scenarios: offline metrics or --live WAVs
+src/never_silent_recorder.py         # LiveKit room + egress + scripted TTS caller
 src/portal.py / portal_static/       # staff desk
 src/run_local.py                     # one-command agent + portal
 src/sip_utils.py                     # DID map, disconnect handling

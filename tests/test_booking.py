@@ -8,10 +8,13 @@ import pytest
 from booking import (
     MemoryBookingProvider,
     TimeoutBookingProvider,
+    ToolPacingProvider,
     Zavy360BookingProvider,
+    apply_job_booking_overrides,
     cancellation_fee_applies,
     filter_slots_by_clinician,
     parse_date_range,
+    seed_inside_24h_booking,
     spoken_two_slot_offer,
 )
 from practice import PracticeClient, seed_mock_diary
@@ -114,6 +117,52 @@ async def test_timeout_wrapper_recovers_without_fake_slots() -> None:
     assert result["ok"] is False
     assert result["reason"] == "timeout"
     assert "invent" in result["note"].lower()
+
+
+@pytest.mark.asyncio
+async def test_lookup_delay_only_slows_availability() -> None:
+    inner = MemoryBookingProvider(_client())
+    paced = ToolPacingProvider(inner, lookup_delay_s=0.05)
+    started = datetime.now(SYDNEY)
+    result = await paced.check_availability(
+        branch="shellharbour",
+        appointment_type="check-up",
+        date_range="this week",
+    )
+    elapsed = (datetime.now(SYDNEY) - started).total_seconds()
+    assert result["ok"] is True
+    assert elapsed >= 0.04
+
+
+@pytest.mark.asyncio
+async def test_lookup_hang_does_not_return_fake_slots() -> None:
+    inner = MemoryBookingProvider(_client())
+    paced = ToolPacingProvider(inner, lookup_hang_s=0.05)
+    result = await paced.check_availability(
+        branch="shellharbour",
+        appointment_type="check-up",
+        date_range="this week",
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "timeout"
+    assert result.get("slots") in (None, [])
+
+
+def test_job_metadata_wraps_and_seeds_cancel() -> None:
+    client = PracticeClient(mode="mock")
+    inner = MemoryBookingProvider(client)
+    wrapped = apply_job_booking_overrides(
+        inner,
+        {
+            "booking_delay_s": 6,
+            "seed_cancel_24h": True,
+        },
+    )
+    assert isinstance(wrapped, ToolPacingProvider)
+    assert wrapped.lookup_delay_s == 6
+    booking = seed_inside_24h_booking(client)
+    assert booking is not None
+    assert cancellation_fee_applies(booking.date, booking.time) is True
 
 
 def test_parse_date_range() -> None:

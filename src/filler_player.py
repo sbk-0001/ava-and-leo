@@ -303,7 +303,7 @@ class FillerPlayer:
                 await self._capture_chunk(faded, clip.sample_rate)
             if gain <= 0.0 and self._model_audio_at is not None:
                 break
-            if self._stop.is_set():
+            if self._stop.is_set() and self._model_audio_at is None:
                 break
             await asyncio.sleep(0)
         self.played_pcm.append(bytes(mixed) or clip.pcm)

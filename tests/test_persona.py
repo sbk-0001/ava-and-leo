@@ -109,13 +109,16 @@ def test_voice_instructions_are_the_verbatim_file() -> None:
     assert "leo" not in lowered
     assert "{{BRANCH_NAME}}" in spoken
     assert "Hahaha! Yeah look, someone's gotta balance out the drill." in spoken
+    assert "Morning, {{BRANCH_NAME}}, Ava speaking!" in spoken
+    assert "how ya going" in spoken
+    assert "what can I do for ya" in spoken
     assert INSTRUCTIONS_PATH.read_text(encoding="utf-8").strip() == spoken
 
 
 def test_ava_instructions_answer_as_mapped_branch() -> None:
     text = ava_instructions("shellharbour")
-    assert "Good morning, Shellharbour Dentists, this is Ava!" in text
-    assert "you never ask which branch they" in text.lower()
+    assert "Morning, Shellharbour Dentists, Ava speaking!" in text
+    assert "you never ask which clinic they" in text.lower()
     assert "Captain Cook Drive" in text
     assert "35 Baan Baan Street" in text
     assert "379 Princes Highway" in text

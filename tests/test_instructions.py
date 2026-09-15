@@ -8,26 +8,29 @@ from persona import (
     load_session_instructions,
 )
 
-CALIBRATION_END = "Hahaha! Yeah look, someone's gotta balance out the drill."
+CALIBRATION_END = "That any good\n     to ya?"
 
 
 def test_instructions_file_is_verbatim() -> None:
     text = INSTRUCTIONS_PATH.read_text(encoding="utf-8")
     assert text.startswith("# WHO YOU ARE\n")
-    assert "You are Ava, receptionist at {{BRANCH_NAME}}." in text
+    assert "You're Ava. You work the front desk at {{BRANCH_NAME}}." in text
     assert CALIBRATION_END in text
     assert text.rstrip().endswith(CALIBRATION_END)
-    assert text.count("{{BRANCH_NAME}}") == 5
-    assert "which branch they\nwant" in text or "which branch they want" in text
-    assert "one or two sentences" in text.lower()
-    assert "long call" in text.lower()
-    assert "do not recap" in text.lower()
+    assert text.count("{{BRANCH_NAME}}") == 6
+    assert "which clinic they want" in text
+    assert "a sentence or two" in text.lower()
+    assert "Morning, {{BRANCH_NAME}}, Ava speaking!" in text
+    assert "how ya going" in text
+    assert "what can I do for ya" in text
 
 
 def test_branch_name_is_interpolated_not_rewritten() -> None:
     loaded = load_session_instructions("Shellharbour Dentists")
     assert "{{BRANCH_NAME}}" not in loaded
-    assert "Good morning, Shellharbour Dentists, this is Ava!" in loaded
+    assert "Morning, Shellharbour Dentists, Ava speaking!" in loaded
+    assert "Shellharbour Dentists, this is Ava — how ya going?" in loaded
+    assert "Shellharbour Dentists, Ava — what can I do for ya?" in loaded
     assert loaded.startswith("# WHO YOU ARE")
     assert CALIBRATION_END in loaded
     # Original file unchanged

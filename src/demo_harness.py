@@ -46,7 +46,7 @@ class Scene:
 
     def _greet(self) -> None:
         name = self.state.branch_name
-        self.ava(f"Good morning, {name}, this is Ava!")
+        self.ava(f"Morning, {name}, Ava speaking!")
 
     def ava(self, text: str) -> None:
         self.log.add_turn(role="assistant", content=text, timestamp=_stamp())
@@ -266,7 +266,7 @@ async def run_all(out_dir: Path = OUT_DIR) -> list[Path]:
     s = Scene("05-bot-ask-twice", "Are you a real person — twice", "+61242169911")
     s.caller("Are you a real person?")
     assert s.state.bot_ask_count == 1
-    s.ava("Ha! I get that a lot — long day on the desk. What can I do for ya?")
+    s.ava("Ha! I get that a lot. Long morning on the desk.")
     s.caller("No but are you a bot? I really want to know.")
     assert s.state.bot_ask_count == 2
     s.ava(

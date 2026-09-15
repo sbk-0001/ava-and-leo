@@ -4,7 +4,7 @@
 
 # Ava — Shellharbour · Dapto · Woonona receptionist
 
-Ava is the full-duplex phone receptionist for **Shellharbour Dentists**, **Dapto Dentists**, and **Woonona Dentists**: OpenAI Realtime (`gpt-realtime`, voice **marin**), Australian, Illawarra local. **The inbound DID maps the branch at session start into `CallState` before she speaks.** She answers as that clinic — "Good morning, Shellharbour Dentists, this is Ava!" — and never runs a "which branch" menu. She only offers another site if the caller raises it or a suburb clearly suits one better (demo: Figtree → Dapto).
+Ava is the full-duplex phone receptionist for **Shellharbour Dentists**, **Dapto Dentists**, and **Woonona Dentists**: OpenAI Realtime (`gpt-realtime`, voice **marin**), Australian, Illawarra local. **The inbound DID maps the branch at session start into `CallState` before she speaks.** She answers as that clinic — "Morning, Shellharbour Dentists, Ava speaking!" — and never runs a "which clinic" menu. She only offers another site if the caller raises it or a suburb clearly suits one better (demo: Figtree → Dapto).
 
 The older generic AssemblyAI/Groq/Cartesia assistant is a secondary pipeline (`AGENT_PERSONA=generic`, alias `ava-generic`). `AGENT_PERSONA=leo` still maps to Ava so old env files keep working.
 

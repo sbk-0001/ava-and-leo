@@ -49,8 +49,10 @@ def test_inbound_greeting_is_the_mapped_branch() -> None:
     lowered = text.lower()
     assert "ava" in lowered
     assert "shellharbour dentists" in lowered
-    assert "good morning, shellharbour dentists, this is ava" in lowered
-    assert "never ask which branch" in lowered
+    assert "morning, shellharbour dentists, ava speaking" in lowered
+    assert "how ya going" in lowered
+    assert "what can i do for ya" in lowered
+    assert "never ask which clinic" in lowered
     assert "illawarra dentists group" not in lowered
     assert "list all three" not in lowered
 
@@ -67,7 +69,9 @@ def test_inbound_greeting_uses_did_branch() -> None:
     ):
         text = inbound_greeting_instructions(branch_id).lower()
         assert name in text
-        assert "never ask which branch" in text
+        assert "never ask which clinic" in text
+        assert "how ya going" in text
+        assert "what can i do for ya" in text
 
 
 def test_ava_session_uses_realtime_llm_and_interruptions() -> None:

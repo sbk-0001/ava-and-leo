@@ -521,11 +521,14 @@ class AvaReceptionist(Agent):
 
 def inbound_greeting_instructions(branch_id: str) -> str:
     branch = get_branch(branch_id)
+    name = branch.trading_name
     return (
         "Sound warm and human, like a real receptionist picking up — not a script. "
-        f"Answer as {branch.trading_name}. They rang this branch; you already know. "
-        "Never ask which branch they want. Never greet as a group menu. "
+        f"Answer as {name}. They rang this branch; you already know. "
+        "Never ask which clinic they want. Never greet as a group menu. "
         "Use one of your opening lines with this branch name, for example: "
-        f'"Good morning, {branch.trading_name}, this is Ava!" '
+        f'"Morning, {name}, Ava speaking!" '
+        f'or "{name}, this is Ava — how ya going?" '
+        f'or "{name}, Ava — what can I do for ya?" '
         "One warm short sentence, then stop and listen. Do not say G'day."
     )

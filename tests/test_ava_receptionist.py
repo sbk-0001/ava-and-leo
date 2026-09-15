@@ -51,6 +51,7 @@ def test_required_tools_are_present() -> None:
         "transfer_to_human",
         "end_call",
         "resolve_date_phrase",
+        "current_time_sydney",
         "ask_for_field",
         "verify_date_of_birth",
     ):
@@ -335,6 +336,49 @@ async def test_check_availability_uses_preferred_clinician(monkeypatch) -> None:
     )
     assert ava.state.may_offer_times() is True
     assert result["status"] == "OK"
+
+
+@pytest.mark.asyncio
+async def test_check_availability_omits_past_morning_slots_at_sydney_1730(
+    monkeypatch,
+) -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from booking import MemoryBookingProvider
+    from call_state import CallState
+    from practice import PracticeClient, seed_mock_diary
+
+    now = datetime(2026, 9, 15, 17, 30, tzinfo=ZoneInfo("Australia/Sydney"))
+    practice = PracticeClient(mode="mock")
+    seed_mock_diary(practice, today=date(2026, 9, 15), days=7)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    ava = AvaReceptionist(
+        state=CallState(branch="shellharbour", now=now),
+        booking=MemoryBookingProvider(practice, now_fn=lambda: now),
+    )
+
+    async def _run_only(self, context, factory, **_kwargs):
+        return await factory()
+
+    monkeypatch.setattr(AvaReceptionist, "_dispatch_with_ladder", _run_only)
+    result = await ava.check_availability(
+        SimpleNamespace(), appointment_type="check-up", date_range="today"
+    )
+    times = [slot["time"] for slot in result.get("slots") or []]
+    assert "08:00" not in times
+    assert "09:30" not in times
+    offer = str(result.get("offer") or "")
+    assert "08:00" not in offer
+    assert "09:30" not in offer
+    remembered = " ".join(
+        str(slot.get("time") or "") for slot in ava.state.last_availability_slots
+    )
+    assert "08:00" not in remembered
+    assert "09:30" not in remembered
+    clock = await ava.current_time_sydney(SimpleNamespace())
+    assert clock["period"] == "evening"
+    assert "5:30 pm" in clock["clock"]
 
 
 @pytest.mark.asyncio

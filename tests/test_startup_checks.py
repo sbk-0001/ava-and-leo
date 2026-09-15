@@ -68,8 +68,9 @@ def test_circuit_breaker_opens_after_repeated_429s() -> None:
 def test_filler_bank_boot_assert_is_wired() -> None:
     from startup_checks import assert_filler_audio_bank
 
-    assert_filler_audio_bank()
-    from filler_bank import FillerBankError, assert_filler_bank
+    assert_filler_audio_bank({"FILLER_ALLOW_SYNTHETIC": "1"})
+    from filler_bank import SYNTHETIC_SOURCE, FillerBankError, assert_filler_bank
 
     assert callable(assert_filler_bank)
     assert issubclass(FillerBankError, RuntimeError)
+    assert SYNTHETIC_SOURCE == "synthetic-placeholder"

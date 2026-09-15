@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 from booking import (
     BookingProvider,
+    filter_past_slots,
     filter_slots_by_clinician,
     invalid_slot_id_result,
     is_canonical_slot_id,
@@ -39,6 +40,10 @@ _SLOT_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
 def _sydney_today() -> date:
     return datetime.now(SYDNEY).date()
+
+
+def _sydney_now() -> datetime:
+    return datetime.now(SYDNEY)
 
 
 def date_from_slot_id(slot_id: str) -> str | None:
@@ -86,6 +91,7 @@ class CachedBookingProvider:
     branches: Sequence[str] = field(default_factory=lambda: tuple(BRANCHES))
     clock: Callable[[], float] = time.perf_counter
     today_fn: Callable[[], date] = _sydney_today
+    now_fn: Callable[[], datetime] = field(default=_sydney_now)
     rng: random.Random = field(default_factory=random.Random)
     _windows: dict[str, BranchWindow] = field(default_factory=dict)
     live_checks: int = 0
@@ -180,6 +186,7 @@ class CachedBookingProvider:
         if window is not None and window.covers(start, end):
             in_range = window.slots_in_range(start, end)
             slots = filter_slots_by_clinician(in_range, clinician)
+            slots = filter_past_slots(slots, now=self.now_fn())
             clinician_miss = bool(
                 clinician
                 and not slots
@@ -221,7 +228,10 @@ class CachedBookingProvider:
         payload["cached"] = False
         payload["cache_age_s"] = None
         if payload.get("ok"):
-            payload["slots"] = list(payload.get("slots") or [])[:AGENT_SLOT_LIMIT]
+            payload["slots"] = filter_past_slots(
+                list(payload.get("slots") or [])[:AGENT_SLOT_LIMIT],
+                now=self.now_fn(),
+            )
             return stamp_availability_status(
                 payload, requested_from=start, requested_to=end
             )
@@ -232,8 +242,11 @@ class CachedBookingProvider:
             overlap_start = max(start, window.date_from)
             overlap_end = min(end, window.date_to)
             if overlap_start <= overlap_end:
-                overlap = filter_slots_by_clinician(
-                    window.slots_in_range(overlap_start, overlap_end), clinician
+                overlap = filter_past_slots(
+                    filter_slots_by_clinician(
+                        window.slots_in_range(overlap_start, overlap_end), clinician
+                    ),
+                    now=self.now_fn(),
                 )
                 covered_from = overlap_start
                 covered_to = overlap_end

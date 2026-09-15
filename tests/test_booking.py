@@ -12,6 +12,7 @@ from booking import (
     Zavy360BookingProvider,
     apply_job_booking_overrides,
     cancellation_fee_applies,
+    filter_past_slots,
     filter_slots_by_clinician,
     invalid_slot_id_result,
     is_canonical_slot_id,
@@ -269,6 +270,71 @@ def test_spoken_two_slot_offer() -> None:
     assert "Wednesday" in line
     assert "Mohit" in line
     assert "which" in line.lower() or "or" in line.lower()
+
+
+SYDNEY_ARVO = datetime(2026, 9, 15, 17, 30, tzinfo=SYDNEY)
+
+
+def test_filter_past_slots_drops_morning_at_sydney_1730() -> None:
+    slots = [
+        {
+            "slot_id": "slot_shellharbour_2026-09-15_0800_dr-mohit-tolani",
+            "date": "2026-09-15",
+            "time": "08:00",
+            "clinician": "Dr Mohit Tolani",
+        },
+        {
+            "slot_id": "slot_shellharbour_2026-09-15_0930_dr-rick-wasef",
+            "date": "2026-09-15",
+            "time": "09:30",
+            "clinician": "Dr Rick Wasef",
+        },
+        {
+            "slot_id": "slot_shellharbour_2026-09-16_0930_dr-mohit-tolani",
+            "date": "2026-09-16",
+            "time": "09:30",
+            "clinician": "Dr Mohit Tolani",
+        },
+    ]
+    kept = filter_past_slots(slots, now=SYDNEY_ARVO)
+    times = {(s["date"], s["time"]) for s in kept}
+    assert ("2026-09-15", "08:00") not in times
+    assert ("2026-09-15", "09:30") not in times
+    assert ("2026-09-16", "09:30") in times
+    speech = spoken_two_slot_offer(slots, now=SYDNEY_ARVO)
+    assert "08:00" not in speech
+    assert "8:00" not in speech
+    assert "09:30" in speech or "9:30" in speech
+
+
+@pytest.mark.asyncio
+async def test_check_availability_trims_past_morning_slots_at_sydney_1730() -> None:
+    client = PracticeClient(mode="mock")
+    seed_mock_diary(client, today=date(2026, 9, 15), days=7)
+    provider = MemoryBookingProvider(client, now_fn=lambda: SYDNEY_ARVO)
+    result = await provider.check_availability(
+        branch="shellharbour",
+        appointment_type="check-up",
+        date_range="today",
+    )
+    times = [slot["time"] for slot in result["slots"]]
+    assert "08:00" not in times
+    assert "09:30" not in times
+    assert all(slot["date"] == "2026-09-15" for slot in result["slots"])
+    speech = spoken_two_slot_offer(result["slots"], now=SYDNEY_ARVO)
+    assert "08:00" not in speech
+    assert "09:30" not in speech
+    week = await provider.check_availability(
+        branch="shellharbour",
+        appointment_type="check-up",
+        date_range="this week",
+    )
+    today_times = [
+        slot["time"] for slot in week["slots"] if slot["date"] == "2026-09-15"
+    ]
+    assert "08:00" not in today_times
+    assert "09:30" not in today_times
+    assert any(slot["date"] > "2026-09-15" for slot in week["slots"])
 
 
 @pytest.mark.asyncio

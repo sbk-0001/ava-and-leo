@@ -40,6 +40,22 @@ def test_boot_fails_if_a_pool_is_removed(tmp_path: Path) -> None:
         assert_filler_bank(root=tmp_path)
 
 
+def test_require_real_rejects_synthetic_placeholder(tmp_path: Path) -> None:
+    from filler_bank import SYNTHETIC_SOURCE
+
+    generate_bank(root=tmp_path, source=SYNTHETIC_SOURCE)
+    with pytest.raises(FillerBankError, match="synthetic-placeholder"):
+        assert_filler_bank(root=tmp_path, require_real=True)
+
+
+def test_committed_filler_bank_is_not_synthetic_placeholder() -> None:
+    from filler_bank import SYNTHETIC_SOURCE, load_manifest
+
+    manifest = load_manifest()
+    assert manifest["source"] != SYNTHETIC_SOURCE
+    assert_filler_bank(require_real=True)
+
+
 def test_session_speaker_fillers_never_call_say_or_generate_reply() -> None:
     src = inspect.getsource(SessionSpeaker)
     assert "generate_reply(" not in src
@@ -65,10 +81,14 @@ async def test_session_speaker_plays_bank_not_model() -> None:
     speaker = SessionSpeaker(session, player=player)
     line = STAGE_1[0]
     await speaker.utter(line)
+    await player.wait_for_playout()
     assert player.played == [line]
     assert replies == []
     assert says == []
     assert speaker.last_first_audio_ts is not None
+    assert player.played_pcm
+    pcm = player.played_pcm[0]
+    assert len(pcm) > 1000
 
 
 def test_duck_is_eighty_ms_never_hard_cut() -> None:

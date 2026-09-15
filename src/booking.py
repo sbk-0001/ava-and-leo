@@ -271,6 +271,43 @@ def _norm_clinician(value: str) -> str:
     return re.sub(r"^dr\.?\s+", "", text)
 
 
+def slot_start_sydney(slot: Mapping[str, Any]) -> datetime | None:
+    """Parse a diary slot's start as Australia/Sydney local time."""
+    try:
+        day = date.fromisoformat(str(slot.get("date") or ""))
+        raw_time = str(slot.get("time") or "").strip()
+        if not raw_time:
+            return None
+        hour_s, minute_s, *_rest = (*raw_time.split(":"), "0", "0")[:2]
+        return datetime(
+            day.year, day.month, day.day, int(hour_s), int(minute_s), tzinfo=SYDNEY
+        )
+    except (TypeError, ValueError):
+        return None
+
+
+def filter_past_slots(
+    slots: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Drop slots whose start is not strictly after now (Sydney).
+
+    Never offer 8:00 / 9:30 'today' when the clock is already arvo/evening.
+    """
+    current = now or datetime.now(SYDNEY)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=SYDNEY)
+    else:
+        current = current.astimezone(SYDNEY)
+    kept: list[dict[str, Any]] = []
+    for slot in slots:
+        start = slot_start_sydney(slot)
+        if start is None or start > current:
+            kept.append(slot)
+    return kept
+
+
 def filter_slots_by_clinician(
     slots: list[dict[str, Any]],
     clinician: str | None,
@@ -289,9 +326,13 @@ def filter_slots_by_clinician(
     ]
 
 
-def spoken_two_slot_offer(slots: list[dict[str, Any]]) -> str:
+def spoken_two_slot_offer(
+    slots: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+) -> str:
     """Speech-ready offer of the two best diary slots. Never invents times."""
-    best = list(slots)[:2]
+    best = filter_past_slots(list(slots), now=now)[:2]
     if not best:
         return "Yeah nah, nothing in that window — want me to try another day?"
     parts: list[str] = []
@@ -341,8 +382,14 @@ class MemoryBookingProvider:
 
     name = "memory"
 
-    def __init__(self, client: PracticeClient) -> None:
+    def __init__(
+        self,
+        client: PracticeClient,
+        *,
+        now_fn: Any | None = None,
+    ) -> None:
         self.client = client
+        self.now_fn = now_fn or (lambda: datetime.now(SYDNEY))
 
     async def check_availability(
         self,
@@ -353,19 +400,24 @@ class MemoryBookingProvider:
         clinician: str | None = None,
         limit: int | None = 12,
     ) -> dict[str, Any]:
+        clock = self.now_fn()
+        today = (
+            clock.date() if isinstance(clock, datetime) else datetime.now(SYDNEY).date()
+        )
         if self.client.mode == "disconnected":
-            start, end = parse_date_range(date_range)
+            start, end = parse_date_range(date_range, today=today)
             return stamp_availability_status(
                 self.client._unavailable("check_availability"),
                 requested_from=start,
                 requested_to=end,
             )
-        start, end = parse_date_range(date_range)
+        start, end = parse_date_range(date_range, today=today)
         diary = await self.client.list_diary(
             branch_id=get_branch(branch).id, date_from=start, date_to=end
         )
         open_slots = [slot for slot in diary.get("slots", []) if not slot.get("taken")]
         filtered = filter_slots_by_clinician(open_slots, clinician)
+        filtered = filter_past_slots(filtered, now=clock)
         if limit is not None:
             filtered = filtered[:limit]
         payload: dict[str, Any] = {

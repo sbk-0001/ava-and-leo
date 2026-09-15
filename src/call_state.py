@@ -238,6 +238,8 @@ class CallState:
     last_book_result: dict[str, Any] | None = None
     preferred_clinician: str | None = None
     today: date = field(default_factory=sydney_today)
+    now: datetime | None = None
+    clock_frozen: bool = False
     date_context: DateContext = field(init=False)
     speakable: SpeakableFacts = field(default_factory=SpeakableFacts)
     booking_flow: BookingState = field(default_factory=BookingState)
@@ -257,14 +259,49 @@ class CallState:
     pending_grounding_note: str | None = None
 
     def __post_init__(self) -> None:
-        self.date_context = refresh_date_context(today=self.today)
+        live = datetime.now(SYDNEY)
+        if self.now is not None:
+            if self.now.tzinfo is None:
+                self.now = self.now.replace(tzinfo=SYDNEY)
+            else:
+                self.now = self.now.astimezone(SYDNEY)
+            self.today = self.now.date()
+            self.clock_frozen = True
+        elif self.today == live.date():
+            self.now = live
+        else:
+            self.now = datetime.combine(self.today, datetime.min.time(), tzinfo=SYDNEY)
+            self.clock_frozen = True
+        self.date_context = refresh_date_context(now=self.now)
         self.speakable.allow_calendar(self.today)
 
-    def refresh_dates(self, today: date | None = None) -> DateContext:
-        """Recompute Sydney DateContext every turn."""
-        if today is not None:
+    def refresh_dates(
+        self,
+        today: date | None = None,
+        now: datetime | None = None,
+    ) -> DateContext:
+        """Recompute Sydney DateContext every turn, including the live clock."""
+        if now is not None:
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=SYDNEY)
+            else:
+                now = now.astimezone(SYDNEY)
+            self.now = now
+            self.today = now.date()
+            self.clock_frozen = True
+        elif today is not None:
             self.today = today
-        self.date_context = refresh_date_context(today=self.today)
+            clock = self.now or datetime.now(SYDNEY)
+            self.now = datetime.combine(today, clock.timetz().replace(tzinfo=SYDNEY))
+            self.clock_frozen = True
+        elif self.clock_frozen:
+            self.date_context = refresh_date_context(now=self.now)
+            self.speakable.allow_calendar(self.today)
+            return self.date_context
+        else:
+            self.now = datetime.now(SYDNEY)
+            self.today = self.now.date()
+        self.date_context = refresh_date_context(now=self.now)
         self.speakable.allow_calendar(self.today)
         return self.date_context
 
@@ -703,9 +740,13 @@ class CallState:
             "- If preferred_clinician is set, pass it to check_availability.\n"
             "- Use resolve_date_phrase for any day that is not today/tomorrow. "
             "If it is ambiguous, ask the caller. Never do date maths yourself.\n"
+            "- If they ask what time it is, answer from DATE CONTEXT / "
+            "current_time_sydney. Do not guess the clock. "
+            "Never offer a slot whose start is before the current Sydney clock.\n"
             "- Speak date, time, and dentist only from SpeakableFacts / last tool "
             "results. If availability_status is UNKNOWN, never say chockers.\n"
-            "- Use the Sydney today/tomorrow lines above. Do not guess the weekday."
+            "- Use the Sydney today/tomorrow/clock lines above. Do not guess "
+            "the weekday or the time of day."
         )
 
     def _offer_summary(self) -> str:
@@ -734,6 +775,8 @@ class CallState:
             "confirmed_slot": self.confirmed_slot,
             "preferred_clinician": self.preferred_clinician,
             "today": self.today.isoformat(),
+            "now": self.now.isoformat() if self.now else None,
+            "period": self.date_context.period,
             "booking_locked": self.may_confirm_booking(),
             "urgency_level": self.urgency_level,
             "escalation_flag": self.escalation_flag,

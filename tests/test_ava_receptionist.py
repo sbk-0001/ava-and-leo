@@ -1,6 +1,9 @@
 """Ava Realtime voice defaults, barge-in, tools, and branch greeting."""
 
 import inspect
+from types import SimpleNamespace
+
+import pytest
 
 from ava_receptionist import (
     AVA_DEFAULT_VOICE,
@@ -57,6 +60,10 @@ def test_required_tools_are_present() -> None:
     assert "next week" in tool_src
     assert "next tuesday" in tool_src.lower() or "next <weekday>" in tool_src.lower()
     assert "clinician" in tool_src
+    book = inspect.getsource(AvaReceptionist.book_appointment)
+    assert "exact slot_id" in book
+    assert "invalid_slot_id" in book
+    assert "_notify_desk" in inspect.getsource(AvaReceptionist)
 
 
 def test_inbound_greeting_is_the_mapped_branch() -> None:
@@ -145,3 +152,78 @@ def test_agent_builds_call_state_before_speech() -> None:
     assert "AmbientBed" in source
     assert "attach_backchannels" in source
     assert "mark_interrupted" in source
+    assert "_register_desk_feed(session, ctx.room)" in source
+
+
+@pytest.mark.asyncio
+async def test_practice_tools_notify_desk_on_success(monkeypatch) -> None:
+    """Desk activity must fire from the tool method for web and SIP."""
+    from booking import MemoryBookingProvider
+    from call_state import CallState
+    from practice import PracticeClient
+
+    practice = PracticeClient(mode="mock")
+    practice.seed_slot(
+        slot_id="slot_shellharbour_2026-09-16_0930_dr-mohit-tolani",
+        branch_id="shellharbour",
+        date="2026-09-16",
+        time="09:30",
+        clinician="Dr Mohit Tolani",
+    )
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    events: list[dict] = []
+    ava = AvaReceptionist(
+        state=CallState(branch="shellharbour"),
+        booking=MemoryBookingProvider(practice),
+        on_desk_event=events.append,
+    )
+
+    async def _run_only(self, context, factory):
+        return await factory()
+
+    monkeypatch.setattr(AvaReceptionist, "_dispatch_with_ladder", _run_only)
+    dummy = SimpleNamespace()
+
+    found = await ava.lookup_patient(dummy, mobile="0412222333")
+    assert found["ok"] is True
+    booked = await ava.book_appointment(
+        dummy,
+        slot_id="slot_shellharbour_2026-09-16_0930_dr-mohit-tolani",
+        reason="check-up",
+        name="Jamie Cole",
+        mobile="0412222333",
+    )
+    assert booked["confirmed"] is True
+    invented = await ava.book_appointment(
+        dummy,
+        slot_id="slot-8-30-tuesday-dr-mohit-tolani-follow-up",
+        reason="follow-up",
+        name="Bill Gates",
+        mobile="0412000111",
+    )
+    assert invented["reason"] == "invalid_slot_id"
+    moved = await ava.reschedule_appointment(
+        dummy, booking_id=booked["booking_id"], new_slot_id="missing"
+    )
+    assert moved["ok"] is False
+    cancelled = await ava.cancel_appointment(dummy, booking_id=booked["booking_id"])
+    assert cancelled["confirmed"] is True
+    message = await ava.take_message(
+        dummy, name="Sam Lee", mobile="0412000000", reason="Call back"
+    )
+    assert message["ok"] is True
+    available = await ava.check_availability(
+        dummy, appointment_type="check-up", date_range="2026-09-16"
+    )
+    assert available["ok"] is True
+
+    actions = [event["action"] for event in events]
+    assert "lookup_patient" in actions
+    assert "book_appointment" in actions
+    assert "cancel_appointment" in actions
+    assert "take_message" in actions
+    assert "check_availability" in actions
+    assert "reschedule_appointment" not in actions
+    book = next(event for event in events if event["action"] == "book_appointment")
+    assert book["refresh_diary"] is True
+    assert book["payload"]["name"] == "Jamie Cole"

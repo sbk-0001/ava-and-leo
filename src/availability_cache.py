@@ -169,7 +169,7 @@ class CachedBookingProvider:
         appointment_type: str,
         date_range: str,
         clinician: str | None = None,
-        limit: int | None = 12,
+        limit: int | None = AGENT_SLOT_LIMIT,
     ) -> dict[str, Any]:
         start, end = parse_date_range(date_range, today=self.today_fn())
         window = self._windows.get(branch)
@@ -178,9 +178,14 @@ class CachedBookingProvider:
             window = self._windows.get(branch)
         if window is not None and window.covers(start, end):
             in_range = window.slots_in_range(start, end)
-            if in_range:
+            slots = filter_slots_by_clinician(in_range, clinician)
+            clinician_miss = bool(
+                clinician
+                and not slots
+                and any(str(slot.get("clinician") or "").strip() for slot in in_range)
+            )
+            if slots or clinician_miss:
                 self.cache_hits += 1
-                slots = filter_slots_by_clinician(in_range, clinician)
                 payload: dict[str, Any] = {
                     "ok": True,
                     "cached": True,
@@ -194,13 +199,7 @@ class CachedBookingProvider:
                 }
                 if clinician:
                     payload["clinician"] = clinician
-                if (
-                    clinician
-                    and not slots
-                    and any(
-                        str(slot.get("clinician") or "").strip() for slot in in_range
-                    )
-                ):
+                if clinician_miss:
                     payload["note"] = (
                         "No slots for that dentist in this range. Do not invent a time. "
                         "Offer another dentist or another day."

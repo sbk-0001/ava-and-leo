@@ -88,14 +88,24 @@ Then open **http://127.0.0.1:8787**
 | See a branch | Use the Barrack Heights / Dapto / Woonona tabs. Address, phone, hours, parking, and dentists are on the left. |
 | Book | Pick a date, tap **Book** on an open slot, enter name + mobile, confirm. The diary only says confirmed after the mock mutation succeeds. |
 | Reschedule / cancel | On a booked row, **Reschedule** (moves to an open slot that day) or **Cancel**. |
-| Talk to Ava | Tap **Call Ava**. Allow the microphone. The portal mints a LiveKit token on the server (keys never go in frontend source) and dispatches `ava-and-leo`. Hang up when finished. |
+| Talk to Ava | Tap **Call Ava**. Allow the microphone. The portal mints a LiveKit token on the server (keys never go in frontend source) and dispatches `ava-and-leo`. The **Live call** panel shows the transcript and booking activity for **web and inbound SIP/phone** (LiveKit `ava.desk` packets plus a local HTTP/SSE bus). Hang up when finished. |
 
-Auth: empty `PORTAL_PASSWORD` is open **on localhost only**. Set `PORTAL_PASSWORD` before exposing the portal. Do not put LiveKit secrets in the browser.
+Auth: empty `PORTAL_PASSWORD` is open **on localhost only**. Set `PORTAL_PASSWORD` before exposing the portal. Do not put LiveKit secrets in the browser. SSE (`/api/desk/stream`) uses the same cookie, or `?token=` (cookie digest or `PORTAL_PASSWORD`).
+
+When the agent worker and portal run as two processes (or the desk is opened through a tunnel), the worker must POST desk events to the **local** portal:
+
+```bash
+DESK_EVENTS_URL=http://127.0.0.1:8787
+# or PORTAL_URL=http://127.0.0.1:8787
+```
+
+`run_local.py` sets both. Inbound SIP rooms (`call-+61…`) are not in the browser Call Ava room — the HTTP bus is what puts those turns on the desk.
 
 You can also run the two processes yourself (they share `.data/mock_diary.json`):
 
 ```bash
 AGENT_PERSONA=ava PRACTICE_SOFTWARE=mock AVA_REALTIME_VOICE=marin \
+  DESK_EVENTS_URL=http://127.0.0.1:8787 \
   uv run python src/agent.py dev
 # other terminal
 AGENT_PERSONA=ava PRACTICE_SOFTWARE=mock \
@@ -216,7 +226,8 @@ src/practice.py                      # in-memory diary used by memory provider +
 src/demo_harness.py                  # Thursday scenarios without live SIP
 src/never_silent_harness.py          # 8 owner scenarios: offline metrics or --live WAVs
 src/never_silent_recorder.py         # LiveKit room + egress + scripted TTS caller
-src/portal.py / portal_static/       # staff desk
+src/portal.py / portal_static/       # staff desk + SSE live feed
+src/desk_events.py                   # transcript/activity packets → LiveKit + HTTP bus
 src/run_local.py                     # one-command agent + portal
 src/sip_utils.py                     # DID map, disconnect handling
 src/make_call.py                     # outbound dispatch + SIP dial

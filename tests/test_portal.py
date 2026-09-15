@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from portal import create_app
+from portal import _cookie_digest, create_app
 from practice import PracticeClient, seed_mock_diary
 
 STATIC = Path(__file__).resolve().parents[1] / "src" / "portal_static"
@@ -112,3 +112,74 @@ def test_portal_phone_brand_is_ava_desk() -> None:
     html = (STATIC / "index.html").read_text()
     assert "Ava desk" in html
     assert "Call Ava" in html
+
+
+def test_portal_has_live_call_panel() -> None:
+    html = (STATIC / "index.html").read_text()
+    js = (STATIC / "app.js").read_text()
+    assert "live-call" in html
+    assert "inbound phone" in html.lower()
+    assert "EventSource" in js
+    assert "/api/desk/stream" in js
+    assert "?token=" in js
+    assert "refresh_diary" in js
+    assert "live-transcript" in js
+    assert "live-activity" in js
+    assert "call-+" not in js or "sip" in js.lower()
+    assert "subscribeDeskStream" in js
+
+
+def test_desk_http_bus_posts_reach_subscribers() -> None:
+    http, _practice = _client()
+    queue = http.app.state.desk_bus.subscribe()
+    packet = {
+        "type": "activity",
+        "action": "book_appointment",
+        "label": "Booked appointment",
+        "payload": {
+            "name": "Jamie Cole",
+            "time": "09:30",
+            "doctor": "Dr Mohit Tolani",
+            "booking_id": "bkg_1",
+        },
+        "refresh_diary": True,
+        "id": "desk_test_1",
+        "room": "call-+61412345678",
+        "channel": "sip",
+    }
+    posted = http.post("/api/desk/events", json=packet)
+    assert posted.status_code == 200
+    assert posted.json()["ok"] is True
+    assert queue.get_nowait() == packet
+
+
+def test_desk_http_bus_rejects_junk() -> None:
+    http, _practice = _client()
+    assert http.post("/api/desk/events", json={"nope": True}).status_code == 400
+
+
+def test_desk_stream_requires_sign_in() -> None:
+    practice = PracticeClient(mode="mock")
+    app = create_app(practice=practice, require_auth=True, portal_password="secret")
+    http = TestClient(app)
+    assert http.get("/api/desk/stream").status_code == 401
+    assert (
+        http.post(
+            "/api/desk/events",
+            json={"type": "activity", "action": "book_appointment"},
+        ).status_code
+        == 403
+    )
+
+
+def test_desk_stream_accepts_query_token() -> None:
+    """SSE uses the same _auth as the rest of the desk: cookie or ?token=."""
+    practice = PracticeClient(mode="mock")
+    app = create_app(practice=practice, require_auth=True, portal_password="secret")
+    http = TestClient(app)
+    digest = _cookie_digest("secret")
+    assert http.get("/api/desk/stream").status_code == 401
+    assert http.get("/api/branches").status_code == 401
+    assert http.get(f"/api/branches?token={digest}").status_code == 200
+    assert http.get("/api/branches?token=secret").status_code == 200
+    assert http.get("/api/desk/stream?token=wrong").status_code == 401

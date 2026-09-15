@@ -23,6 +23,10 @@ logger = logging.getLogger("booking")
 
 SYDNEY = ZoneInfo("Australia/Sydney")
 PROVIDER_TIMEOUT_S = 8.0
+CANONICAL_SLOT_ID_RE = re.compile(r"^slot_[a-z0-9]+_\d{4}-\d{2}-\d{2}_")
+_TIME_OF_DAY_RE = re.compile(
+    r"\b(morning|mornings|morno|arvo|afternoon|afternoons|evening|evenings)\b"
+)
 
 
 class BookingProvider(Protocol):
@@ -121,7 +125,8 @@ def parse_date_range(
 ) -> tuple[str, str]:
     """Accept ISO dates, 'today', 'this week', 'next week', 'next tuesday'."""
     now = today or datetime.now(SYDNEY).date()
-    raw = re.sub(r"[^\w\s/-]+", " ", (date_range or "").lower())
+    raw = _TIME_OF_DAY_RE.sub("", (date_range or "").strip().lower())
+    raw = re.sub(r"[^\w\s/-]+", " ", raw)
     raw = re.sub(r"\s+", " ", raw).strip()
     if not raw or raw in {"today", "asap", "soon"}:
         return now.isoformat(), now.isoformat()
@@ -144,6 +149,25 @@ def parse_date_range(
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
         return raw, raw
     return now.isoformat(), (now + timedelta(days=6)).isoformat()
+
+
+def is_canonical_slot_id(slot_id: str) -> bool:
+    """Diary ids look like slot_<branch>_<YYYY-MM-DD>_<time>_dr-..."""
+    return bool(CANONICAL_SLOT_ID_RE.match((slot_id or "").strip()))
+
+
+def invalid_slot_id_result(slot_id: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "confirmed": False,
+        "reason": "invalid_slot_id",
+        "slot_id": slot_id,
+        "note": (
+            "That slot_id is not a diary id. Call check_availability again "
+            "and book only an exact slot_id from the slots list. "
+            "Never invent or reconstruct times or ids."
+        ),
+    }
 
 
 def _norm_clinician(value: str) -> str:
@@ -249,6 +273,8 @@ class MemoryBookingProvider:
             "appointment_type": appointment_type,
             "date_from": start,
             "date_to": end,
+            # Full list when limit is None (14-day cache prewarm). Agent-facing
+            # calls keep the default trim of 12.
             "slots": filtered,
         }
         if clinician:

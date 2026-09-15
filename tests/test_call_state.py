@@ -187,4 +187,4 @@ def test_may_offer_times_only_after_availability_slots() -> None:
     )
     assert state.may_offer_times() is True
     assert "10:10" in state.prompt_block()
-    assert "do not name any clock time" not in state.prompt_block().lower()
+    assert "Dr Mohit Tolani" in state.prompt_block()

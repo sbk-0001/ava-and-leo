@@ -150,6 +150,31 @@ class CallerStore:
         self.save()
         return record
 
+    def open_bookings(self, e164: str | None) -> list[dict[str, Any]]:
+        record = self.lookup(e164)
+        if record is None:
+            return []
+        open_rows: list[dict[str, Any]] = []
+        for item in record.booking_history:
+            if not isinstance(item, dict):
+                continue
+            status = str(item.get("status") or "").strip().lower()
+            if status in {"cancelled", "canceled", "completed", "no_show"}:
+                continue
+            if not item.get("booking_id"):
+                continue
+            open_rows.append(dict(item))
+        return open_rows
+
+    def mark_cancelled(self, e164: str | None, booking_id: str) -> None:
+        record = self.lookup(e164)
+        if record is None or not booking_id:
+            return
+        for item in record.booking_history:
+            if str(item.get("booking_id") or "") == booking_id:
+                item["status"] = "cancelled"
+        self.save()
+
     def purge_older_than(
         self,
         *,
@@ -200,7 +225,9 @@ def apply_record_to_state(state: Any, record: CallerRecord) -> None:
     """Populate CallState for greet-by-name / skip-number. Clinical fields stay private."""
     state.known_caller = True
     state.ani = record.e164
-    if record.name and not state.caller_name:
+    if getattr(state, "name_corrected", False):
+        pass
+    elif record.name and not state.caller_name:
         state.caller_name = record.name
     digits = re.sub(r"\D", "", record.e164)
     if digits.startswith("61") and len(digits) == 11:

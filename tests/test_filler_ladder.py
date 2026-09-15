@@ -119,11 +119,10 @@ async def test_availability_result_plays_stage1_cover_from_bank() -> None:
     result, trace = await ladder.dispatch(tool)
     assert result["ok"] is True
     assert result["slots"]
-    assert trace.result_cover is True
     assert trace.path == "LATENCY"
     assert speaker.spoken[0] in STAGE_1
-    assert speaker.spoken[-1] in STAGE_1
-    assert len(speaker.spoken) >= 2
+    assert trace.result_cover is False
+    assert len([line for line in speaker.spoken if line in STAGE_1]) == 1
 
 
 @pytest.mark.asyncio
@@ -211,8 +210,7 @@ async def test_caller_interrupt_restarts_from_stage_2() -> None:
     assert result["ok"] is True
     assert trace.caller_interrupted is True
     assert trace.stages_spoken[0] == 1
-    assert trace.result_cover is True
-    assert trace.stages_spoken[-1] == 1
+    assert trace.result_cover is False
     assert 2 in trace.stages_spoken
     assert speaker.spoken[0] in STAGE_1
 
@@ -266,7 +264,7 @@ async def test_cached_fast_path_cancels_after_stage_1() -> None:
     assert result["cached"] is True
     assert FAST_PATH_S == 0.3
     assert trace.stages_spoken[0] == 1
-    assert trace.result_cover is True
+    assert trace.result_cover is False
     assert 2 not in trace.stages_spoken
     assert trace.fast_path is True
     assert elapsed < 0.5

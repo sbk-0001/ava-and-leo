@@ -93,10 +93,24 @@ def attach_backchannels(
     *,
     scheduler: BackchannelScheduler | None = None,
     speaker: Any | None = None,
+    enabled: bool = False,
+    filler_player: Any | None = None,
 ) -> BackchannelScheduler:
+    """Attach the listener. Playback stays off until single-voice is proven.
+
+    Overlapping mm/yep on the live Realtime mouth is a second talker.
+    """
     sched = scheduler or BackchannelScheduler(state)
 
     def _on_user_state(ev: Any) -> None:
+        if not enabled:
+            return
+        player = filler_player or speaker
+        if player is not None and (
+            getattr(player, "model_speaking", False)
+            or getattr(player, "is_playing", False)
+        ):
+            return
         new_state = getattr(ev, "new_state", None)
         speaking = (
             str(new_state) in {"speaking", "UserState.SPEAKING"}

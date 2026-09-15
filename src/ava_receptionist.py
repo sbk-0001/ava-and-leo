@@ -7,6 +7,7 @@ import contextlib
 import inspect
 import logging
 import os
+import time
 from collections.abc import AsyncIterable, Awaitable, Callable, Mapping
 from typing import Any
 
@@ -31,13 +32,19 @@ from booking import (
     unwrap_practice_client,
 )
 from call_log import CallLog
-from call_state import CallState
+from call_state import CallState, booking_is_locked
 from caller_store import CallerStore, get_shared_caller_store, upsert_from_booking
 from date_context import current_time_sydney as current_time_sydney_fn
 from date_context import resolve_date_phrase as resolve_date_phrase_fn
 from dead_air import DeadAirMonitor
 from desk_events import activity_packet_from_result, schedule_desk_publish
-from filler_ladder import FillerLadder, SessionSpeaker, speak_scripted
+from filler_bank import get_filler_bank
+from filler_ladder import (
+    FillerLadder,
+    SessionSpeaker,
+    kick_scripted_speech,
+    speak_scripted,
+)
 from filler_player import FillerPlayer
 from grounding import (
     grounded_realtime_transcription,
@@ -48,6 +55,7 @@ from persona import ava_instructions, get_branch, quote_fee, resolve_tool_branch
 from phrase_pools import RECOVERY, STAGE_1, STAGE_5
 from realtime_hygiene import maybe_trim_realtime_context
 from sip_utils import find_sip_participant
+from turn_filter import classify_user_turn
 
 try:
     from livekit.agents import StopResponse
@@ -163,7 +171,9 @@ class AvaReceptionist(Agent):
         self._active_ladder: FillerLadder | None = None
         self._scripted_speech = False
         self._speech_session: Any | None = None
-        self.filler_player = filler_player or FillerPlayer(ambient=ambient)
+        self.filler_player = filler_player or FillerPlayer(
+            get_filler_bank(), ambient=ambient
+        )
         self.dead_air = dead_air or DeadAirMonitor(branch=state.branch)
         self.filler_player.on_audio = self.dead_air.note_audio
         self.branch = get_branch(state.branch)
@@ -339,6 +349,136 @@ class AvaReceptionist(Agent):
         except Exception:
             logger.exception("persist collected DOB failed")
 
+    def _persist_caller_name(self) -> None:
+        key = self.state.ani or self.state.caller_mobile
+        if not key or not self.state.caller_name:
+            return
+        try:
+            self.caller_store.touch(
+                key,
+                name=self.state.caller_name,
+                preferred_branch=self.state.branch,
+            )
+        except Exception:
+            logger.exception("caller store name upsert failed")
+
+    def _kick_locked_speech(self, context: RunContext, facts: str) -> None:
+        """Start Realtime confirmation. Duck fillers; do not play another clip."""
+        notify = getattr(self.filler_player, "notify_model_audio", None)
+        if callable(notify):
+            notify()
+        session = getattr(context, "session", None)
+        if session is None:
+            return
+        try:
+            kick_scripted_speech(session, facts, kind="script")
+        except Exception:
+            logger.exception("locked-result speech kick failed")
+
+    def _kick_book_confirm(
+        self, context: RunContext, result: Mapping[str, Any]
+    ) -> None:
+        """Start confirmation speech immediately. Do not also play a bank clip."""
+        name = self.state.caller_name or "the caller"
+        facts = (
+            f"Booking is locked for {name}. "
+            f"Date {result.get('date') or ''}, time {result.get('time') or ''}, "
+            f"dentist {result.get('clinician') or ''}. "
+            "Confirm those facts once and say they're all set. "
+            "Do not go quiet. Do not invent extra details."
+        )
+        self.state.book_confirm_kicked_at = time.perf_counter()
+        self._kick_locked_speech(context, facts)
+
+    def _kick_cancel_confirm(
+        self, context: RunContext, result: Mapping[str, Any]
+    ) -> None:
+        name = self.state.caller_name or "the caller"
+        facts = (
+            f"The appointment for {name} is cancelled "
+            f"(booking {result.get('booking_id') or ''}). "
+            "Confirm that once. Do not go quiet. Do not invent another booking."
+        )
+        self._kick_locked_speech(context, facts)
+
+    async def _collect_open_bookings(self) -> list[dict[str, Any]]:
+        seen: dict[str, dict[str, Any]] = {}
+        key = self.state.ani or self.state.caller_mobile
+        for item in self.caller_store.open_bookings(key):
+            bid = str(item.get("booking_id") or "")
+            if bid:
+                seen[bid] = {**item, "source": "caller_store"}
+        if not self.state.dob_verified:
+            return list(seen.values())
+        record = (
+            self.state.pms_record if isinstance(self.state.pms_record, dict) else {}
+        )
+        for item in list(record.get("bookings") or []):
+            if isinstance(item, dict) and item.get("booking_id"):
+                seen[str(item["booking_id"])] = {**item, "source": "pms_record"}
+        mobile = self.state.caller_mobile
+        if mobile:
+            try:
+                looked = await self.booking.lookup_patient(mobile=mobile)
+            except Exception:
+                looked = {}
+            for item in (
+                list(looked.get("bookings") or []) if isinstance(looked, dict) else []
+            ):
+                if isinstance(item, dict) and item.get("booking_id"):
+                    seen[str(item["booking_id"])] = {**item, "source": "diary"}
+        return list(seen.values())
+
+    async def _resolve_cancel_target(self, booking_id: str) -> dict[str, Any]:
+        candidates = await self._collect_open_bookings()
+        wanted = (booking_id or "").strip()
+        ids = {str(row.get("booking_id")): row for row in candidates}
+        if wanted and wanted in ids:
+            return {"ok": True, "booking_id": wanted, "candidates": candidates}
+        if len(candidates) == 1:
+            only = str(candidates[0].get("booking_id"))
+            return {
+                "ok": True,
+                "booking_id": only,
+                "candidates": candidates,
+                "resolved_from": candidates[0].get("source"),
+            }
+        if len(candidates) > 1:
+            brief = [
+                {
+                    key: row.get(key)
+                    for key in (
+                        "booking_id",
+                        "date",
+                        "time",
+                        "clinician",
+                        "branch",
+                        "branch_id",
+                        "source",
+                    )
+                    if row.get(key)
+                }
+                for row in candidates
+            ]
+            return {
+                "ok": False,
+                "confirmed": False,
+                "reason": "ambiguous_booking",
+                "candidates": brief,
+                "note": (
+                    "List these bookings briefly and ask which one. "
+                    "Do not invent a cancel."
+                ),
+            }
+        if wanted:
+            return {"ok": True, "booking_id": wanted, "candidates": []}
+        return {
+            "ok": False,
+            "confirmed": False,
+            "reason": "booking_not_found",
+            "note": "No open booking on this number. Do not invent a cancel.",
+        }
+
     def _kick_substitute_speech(self, spoken: str) -> None:
         self._kick_recovery(spoken, ["confirm"])
 
@@ -397,6 +537,13 @@ class AvaReceptionist(Agent):
         in_flight: str = "tool",
     ) -> dict[str, Any]:
         """Speak stage-1 audio, then run the tool. Ladder covers the wait."""
+        # If Realtime audio is still in flight, wait ~80ms then skip the
+        # filler (play() refuses under the model). Never force-end speaking
+        # to start a bank clip — that is two mouths.
+        for _ in range(4):
+            if not getattr(self.filler_player, "model_speaking", False):
+                break
+            await asyncio.sleep(0.02)
         self.filler_player.session = context.session
         self.filler_player.ambient = self.ambient
         speaker = SessionSpeaker(context.session, player=self.filler_player)
@@ -439,13 +586,33 @@ class AvaReceptionist(Agent):
                     logger.exception("keyboard stop failed")
 
     async def on_user_turn_completed(self, turn_ctx: Any, new_message: Any) -> None:
-        self.state.turn_count += 1
         self.state.refresh_dates()
         text = (getattr(new_message, "text_content", None) or "").strip()
+        recent = list(self.state.stock_phrases_used[-8:])
+        verdict = classify_user_turn(
+            text,
+            tool_in_flight=self._active_ladder is not None,
+            recent_fillers=recent,
+        )
+        if verdict.ignore:
+            self.state.junk_turns += 1
+            logger.info(
+                "ignored junk turn reason=%s text=%r goal=%s",
+                verdict.reason,
+                text[:80],
+                self.state.active_goal,
+            )
+            if StopResponse is not None:
+                raise StopResponse()
+            return
+        self.state.turn_count += 1
+        if verdict.name_correction:
+            self.state.correct_caller_name(verdict.name_correction)
+            self._persist_caller_name()
         self.state.observe_user_text(text)
         if self.call_log is not None and text:
             self.call_log.add_turn(role="user", content=text)
-        if self._active_ladder is not None:
+        if self._active_ladder is not None and verdict.affects_ladder:
             await self._active_ladder.on_caller_speech()
         if self.state.urgency_level == "emergency_000":
             try:
@@ -775,7 +942,8 @@ class AvaReceptionist(Agent):
             if not held.get("ok"):
                 return held
             if name:
-                self.state.caller_name = name
+                self.state.correct_caller_name(name)
+                self._persist_caller_name()
             mobile_result = self.state.register_mobile(
                 mobile or self.state.caller_mobile
             )
@@ -805,6 +973,8 @@ class AvaReceptionist(Agent):
                 upsert_from_booking(self.caller_store, self.state, result)
             except Exception:
                 logger.exception("caller store write failed")
+            if booking_is_locked(result):
+                self._kick_book_confirm(context, result)
         self._log_tool(
             "book_appointment",
             result,
@@ -857,20 +1027,43 @@ class AvaReceptionist(Agent):
     async def cancel_appointment(
         self,
         context: RunContext,
-        booking_id: str,
+        booking_id: str = "",
     ) -> dict[str, Any]:
-        """Cancel an existing booking. Returns whether the $50 policy applies.
+        """Cancel an existing booking. After DOB verify, resolve by this mobile.
+
+        If booking_id is missing or not on the diary, use caller_store history
+        and diary bookings for this ANI. If several are open, list them.
+        Never invent a cancel success.
 
         Args:
-            booking_id: Existing booking id.
+            booking_id: Existing booking id if known. Optional after verify.
         """
 
         async def _run() -> dict[str, Any]:
             self.state.intent = "cancel"
+            self.state.lock_goal("cancel", "Cancel the caller's existing appointment")
             gated = self.state.require_dob_for_existing()
             if not gated.get("ok"):
                 return gated
-            cancelled = await self.booking.cancel_appointment(booking_id=booking_id)
+            resolved = await self._resolve_cancel_target(booking_id)
+            if not resolved.get("ok"):
+                return resolved
+            target = str(resolved.get("booking_id") or "")
+            cancelled = await self.booking.cancel_appointment(booking_id=target)
+            cancelled = dict(cancelled)
+            if cancelled.get("ok") and cancelled.get("confirmed"):
+                try:
+                    self.caller_store.mark_cancelled(
+                        self.state.ani or self.state.caller_mobile, target
+                    )
+                except Exception:
+                    logger.exception("caller store cancel mark failed")
+            elif cancelled.get("reason") == "booking_not_found":
+                cancelled["confirmed"] = False
+                cancelled.setdefault(
+                    "note",
+                    "That booking is not on the diary. Do not invent a cancel.",
+                )
             if cancelled.get("fee_applies"):
                 cancelled["say"] = (
                     "There is a fifty dollar fee for inside twenty-four hours, "
@@ -878,7 +1071,11 @@ class AvaReceptionist(Agent):
                 )
             return cancelled
 
-        result = await self._dispatch_with_ladder(context, _run)
+        result = await self._dispatch_with_ladder(
+            context, _run, in_flight="cancel_appointment"
+        )
+        if result.get("ok") and result.get("confirmed"):
+            self._kick_cancel_confirm(context, result)
         self._log_tool("cancel_appointment", result, {"booking_id": booking_id})
         return result
 
@@ -900,7 +1097,11 @@ class AvaReceptionist(Agent):
             self.state.pms_record = looked if isinstance(looked, dict) else None
             if looked.get("is_existing_patient"):
                 patients = looked.get("patients") or []
-                if patients and not self.state.caller_name:
+                if (
+                    patients
+                    and not self.state.caller_name
+                    and not self.state.name_corrected
+                ):
                     self.state.caller_name = patients[0].get("name")
             public = dict(looked)
             if not self.state.dob_verified:
@@ -963,6 +1164,33 @@ class AvaReceptionist(Agent):
         return result
 
     @function_tool()
+    async def correct_caller_name(
+        self, context: RunContext, name: str
+    ) -> dict[str, Any]:
+        """Overwrite the ANI greet name. This name is authoritative for the call.
+
+        Args:
+            name: The name the caller just gave, e.g. Johnson.
+        """
+        del context
+        result = self.state.correct_caller_name(name)
+        if result.get("ok"):
+            self._persist_caller_name()
+        self._log_tool("correct_caller_name", result, {"name": name})
+        return result
+
+    @function_tool()
+    async def read_date_of_birth(self, context: RunContext) -> dict[str, Any]:
+        """Read back this caller's verified DOB only if they ask and dob_verified.
+
+        Never volunteer. Never disclose if identity is not verified.
+        """
+        del context
+        result = self.state.dob_readback()
+        self._log_tool("read_date_of_birth", result, {})
+        return result
+
+    @function_tool()
     async def quote_fee(self, context: RunContext, service: str) -> dict[str, Any]:
         """Quote only the published fee table. Unknown means unknown — offer a callback.
 
@@ -1001,7 +1229,7 @@ class AvaReceptionist(Agent):
         """
 
         async def _run() -> dict[str, Any]:
-            if name:
+            if name and not self.state.name_corrected:
                 self.state.caller_name = name
             mobile_result = self.state.register_mobile(mobile)
             stored_mobile = self.state.caller_mobile or mobile or ""

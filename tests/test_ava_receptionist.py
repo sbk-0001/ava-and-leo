@@ -54,6 +54,8 @@ def test_required_tools_are_present() -> None:
         "current_time_sydney",
         "ask_for_field",
         "verify_date_of_birth",
+        "correct_caller_name",
+        "read_date_of_birth",
     ):
         assert f"async def {name}" in source, name
     assert "TransferSIPParticipantRequest" in source

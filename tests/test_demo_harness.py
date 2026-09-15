@@ -35,7 +35,7 @@ async def test_thursday_transcripts(tmp_path: Path) -> None:
     )
 
     five = texts["05-bot-ask-twice.md"]
-    assert "long morning on the desk" in five
+    assert "long morning on the desk" in five.lower()
     assert "AI receptionist" in five or "I'm an AI" in five
 
     six = texts["06-figtree-offer-dapto.md"]

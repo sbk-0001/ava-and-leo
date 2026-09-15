@@ -104,3 +104,15 @@ def test_portal_ui_says_call_ava() -> None:
     assert "Connecting to Ava" in js
     assert "Connected to Ava" in js
     assert "Leo" not in js
+
+
+def test_portal_phone_brand_is_illawarra_dentists() -> None:
+    """Desk brand is the group number; clinic facts still come from the API."""
+    html = (STATIC / "index.html").read_text()
+    assert "Illawarra Dentists" in html
+    assert "Ava desk — Illawarra Dentists" in html
+    leftover = html.replace("Illawarra Dentists", "")
+    assert "Illawarra Dental" not in leftover
+    assert "Illawarra Group" not in leftover
+    assert "Illawarra group" not in leftover
+    assert "Shellharbour Dentists" not in html

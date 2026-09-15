@@ -2,9 +2,9 @@
   <img src="./.github/assets/livekit-mark.png" alt="LiveKit logo" width="100" height="100">
 </a>
 
-# Ava — Shellharbour Dentists receptionist
+# Ava — Illawarra Dentists receptionist
 
-Ava is the phone receptionist for the Shellharbour Dentists group (Barrack Heights, Dapto, Woonona): OpenAI Realtime (`gpt-realtime`, voice **marin**), low-latency speech-to-speech. The older generic AssemblyAI/Groq/Cartesia assistant is a secondary pipeline (`AGENT_PERSONA=generic`, alias `ava-generic`). `AGENT_PERSONA=leo` still maps to Ava so old env files keep working.
+Ava is the phone receptionist for **Illawarra Dentists** (Barrack Heights / Shellharbour Dentists, Dapto Dentists, Woonona Dentists): OpenAI Realtime (`gpt-realtime`, voice **marin**), low-latency speech-to-speech. Callers reach the Illawarra Dentists group number first; Ava then helps them choose which clinic to book at. The older generic AssemblyAI/Groq/Cartesia assistant is a secondary pipeline (`AGENT_PERSONA=generic`, alias `ava-generic`). `AGENT_PERSONA=leo` still maps to Ava so old env files keep working.
 
 | `AGENT_PERSONA` | Who | Path |
 |-----------------|-----|------|
@@ -132,7 +132,7 @@ uv run python src/make_call.py --to +61400000000 --branch dapto
 
 The script [dispatches](https://docs.livekit.io/agents/server/agent-dispatch/) agent `ava-and-leo` and calls [`CreateSIPParticipant`](https://docs.livekit.io/telephony/making-calls/outbound-calls/) with `wait_until_answered=True`. Failed dials raise `TwirpError` / `SipCallError` (busy, no answer, trunk failure). Mid-call hangups are handled per [SIP disconnect docs](https://docs.livekit.io/telephony/making-calls/outbound-calls/#mid-call-disconnections): `USER_UNAVAILABLE` and `SIP_TRUNK_FAILURE` explicitly shut down the job.
 
-On outbound, Ava waits for the callee to speak first. On inbound, Ava greets as the mapped branch.
+On outbound, Ava waits for the callee to speak first. On inbound, Ava greets as Illawarra Dentists, then helps choose Shellharbour, Dapto, or Woonona.
 
 ## Tests
 

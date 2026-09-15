@@ -1,4 +1,4 @@
-"""Ava — Shellharbour Dentists OpenAI Realtime receptionist."""
+"""Ava — Illawarra Dentists OpenAI Realtime receptionist."""
 
 from __future__ import annotations
 
@@ -14,7 +14,13 @@ from livekit.agents.beta.tools import EndCallTool
 from livekit.plugins import openai
 from openai.types.beta.realtime.session import TurnDetection
 
-from persona import ava_instructions, get_branch, quote_fee
+from persona import (
+    GROUP_NAME,
+    ava_instructions,
+    get_branch,
+    quote_fee,
+    resolve_tool_branch,
+)
 from practice import PracticeClient
 from sip_utils import find_sip_participant
 
@@ -59,7 +65,7 @@ def ava_realtime_model() -> openai.realtime.RealtimeModel:
 
 
 class AvaReceptionist(Agent):
-    """Australian-English phone receptionist for Shellharbour Dentists."""
+    """Australian-English phone receptionist for Illawarra Dentists."""
 
     def __init__(
         self,
@@ -94,6 +100,12 @@ class AvaReceptionist(Agent):
             tools=end_call.tools,
         )
 
+    def _select_branch(self, branch_id: str | None) -> str:
+        selected = resolve_tool_branch(branch_id, self.branch.id)
+        if selected != self.branch.id:
+            self.branch = get_branch(selected)
+        return self.branch.id
+
     @function_tool()
     async def find_patient(
         self,
@@ -120,16 +132,25 @@ class AvaReceptionist(Agent):
         context: RunContext,
         date: str,
         clinician: str | None = None,
+        branch_id: str | None = None,
     ) -> dict[str, Any]:
         """Check diary availability. Only returns real slots; never invent times.
 
         Args:
             date: Requested date in YYYY-MM-DD.
             clinician: Optional dentist name to filter by.
+            branch_id: Clinic to check: shellharbour, dapto, or woonona. Use the
+                clinic the caller chose. Defaults to the current clinic.
         """
-        logger.info("get_availability date=%s clinician=%s", date, clinician)
+        clinic_id = self._select_branch(branch_id)
+        logger.info(
+            "get_availability date=%s clinician=%s branch=%s",
+            date,
+            clinician,
+            clinic_id,
+        )
         return await self.practice.get_availability(
-            branch_id=self.branch.id, date=date, clinician=clinician
+            branch_id=clinic_id, date=date, clinician=clinician
         )
 
     @function_tool()
@@ -142,6 +163,7 @@ class AvaReceptionist(Agent):
         name: str | None = None,
         phone: str | None = None,
         date_of_birth: str | None = None,
+        branch_id: str | None = None,
     ) -> dict[str, Any]:
         """Book a diary slot returned by get_availability. Say confirmed only if confirmed is true.
 
@@ -152,12 +174,19 @@ class AvaReceptionist(Agent):
             name: Full name for a new patient when no patient_id exists.
             phone: Mobile for a new patient.
             date_of_birth: Date of birth if given, preferably YYYY-MM-DD.
+            branch_id: Clinic to book at: shellharbour, dapto, or woonona. Must
+                match the slot. Defaults to the current clinic.
         """
+        clinic_id = self._select_branch(branch_id)
         logger.info(
-            "book_appointment slot=%s patient=%s name=%s", slot_id, patient_id, name
+            "book_appointment slot=%s patient=%s name=%s branch=%s",
+            slot_id,
+            patient_id,
+            name,
+            clinic_id,
         )
         return await self.practice.book_appointment(
-            branch_id=self.branch.id,
+            branch_id=clinic_id,
             slot_id=slot_id,
             reason=reason,
             patient_id=patient_id,
@@ -315,10 +344,12 @@ class AvaReceptionist(Agent):
 
 
 def inbound_greeting_instructions(branch_id: str) -> str:
-    branch = get_branch(branch_id)
+    del branch_id  # DID/portal hint is not the inbound brand.
     return (
         "Sound warm and human, like a real receptionist picking up — not a script. "
-        f"Greet the caller as Ava at {branch.trading_name} in {branch.suburb}. "
-        "One warm short sentence plus one question. Offer to help with a booking "
-        "or a question. Do not say G'day."
+        f"Greet the caller as Ava at {GROUP_NAME}. They reached the Illawarra "
+        "Dentists group number, not one clinic. Do not greet as Shellharbour "
+        "Dentists, Dapto Dentists, or Woonona Dentists. One warm short sentence "
+        "plus one question. Offer to help with a booking or a question, then "
+        "help them choose among Shellharbour, Dapto, or Woonona. Do not say G'day."
     )

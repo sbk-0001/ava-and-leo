@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agent-starter-python"
 version = "1.0.0"
-description = "Ava LiveKit voice agent — Shellharbour Dentists phone receptionist"
+description = "Ava LiveKit voice agent — Illawarra Dentists phone receptionist"
 requires-python = ">=3.10, <3.15"
 
 dependencies = [

@@ -99,6 +99,34 @@ async def test_first_audio_precedes_tool_dispatch() -> None:
 
 
 @pytest.mark.asyncio
+async def test_availability_result_plays_stage1_cover_from_bank() -> None:
+    ladder, _clock, speaker, _state, _booking = _ladder()
+
+    async def tool():
+        return {
+            "ok": True,
+            "status": "OK",
+            "slots": [
+                {
+                    "slot_id": "slot_shellharbour_2026-09-16_0930_dr-mohit-tolani",
+                    "date": "2026-09-16",
+                    "time": "09:30",
+                    "clinician": "Dr Mohit Tolani",
+                }
+            ],
+        }
+
+    result, trace = await ladder.dispatch(tool)
+    assert result["ok"] is True
+    assert result["slots"]
+    assert trace.result_cover is True
+    assert trace.path == "LATENCY"
+    assert speaker.spoken[0] in STAGE_1
+    assert speaker.spoken[-1] in STAGE_1
+    assert len(speaker.spoken) >= 2
+
+
+@pytest.mark.asyncio
 async def test_ladder_timings_and_no_repeat() -> None:
     ladder, clock, speaker, state, _booking = _ladder()
     hang = asyncio.Event()

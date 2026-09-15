@@ -607,12 +607,14 @@ async def my_agent(ctx: JobContext):
     else:
         call_state.channel = "web"
     logger.info(
-        "call_state ready before speech branch=%s name=%s known=%s kill_switch=%s today=%s",
+        "call_state ready before speech branch=%s name=%s known=%s kill_switch=%s today=%s clock=%s period=%s",
         call_state.branch,
         call_state.branch_name,
         call_state.known_caller,
         kill_switch,
         call_state.today_spoken,
+        call_state.date_context.clock_short,
+        call_state.date_context.period,
     )
 
     started_at = datetime.now(timezone.utc)

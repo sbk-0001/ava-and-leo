@@ -140,10 +140,11 @@ class FillerPlayer:
         if self._task is not None and not self._task.done():
             self._task.cancel()
         live = await self._try_live_play(clip)
-        if live:
-            return
+        # Always mix PCM onto the session output as well so tool waits are
+        # never silent if BackgroundAudioPlayer isn't started yet.
         self._task = asyncio.create_task(
-            self._mix_playout(clip), name="ava-filler-playout"
+            self._mix_playout(clip, skip_capture=live),
+            name="ava-filler-playout",
         )
         await asyncio.sleep(0)
 
@@ -168,7 +169,11 @@ class FillerPlayer:
         source: Any = str(clip.path) if clip.path.is_file() else self._frame_iter(clip)
 
         try:
-            handle = play(AudioConfig(source, volume=1.0, fade_out=DUCK_S))
+            kwargs: dict[str, Any] = {"volume": 1.0}
+            sig = inspect.signature(AudioConfig)
+            if "fade_out" in sig.parameters:
+                kwargs["fade_out"] = DUCK_S
+            handle = play(AudioConfig(source, **kwargs))
             if inspect.isawaitable(handle):
                 handle = await handle
             self._live_handle = handle
@@ -211,7 +216,31 @@ class FillerPlayer:
 
         return _frames()
 
-    async def _mix_playout(self, clip: FillerClip) -> None:
+    async def _capture_chunk(self, data: bytes, sample_rate: int) -> None:
+        sink = getattr(self.session, "output", None)
+        audio_out = getattr(sink, "audio", None) if sink is not None else None
+        capture = getattr(audio_out, "capture_frame", None)
+        if not callable(capture):
+            return
+        try:
+            from livekit import rtc
+
+            samples = max(1, len(data) // 2)
+            frame = rtc.AudioFrame(
+                data=data,
+                sample_rate=sample_rate,
+                num_channels=1,
+                samples_per_channel=samples,
+            )
+            result = capture(frame)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.exception("filler capture_frame failed")
+
+    async def _mix_playout(
+        self, clip: FillerClip, *, skip_capture: bool = False
+    ) -> None:
         mixed = bytearray()
         samples_since_model = 0
         for chunk in pcm_frames(clip.pcm, sample_rate=clip.sample_rate):
@@ -223,34 +252,17 @@ class FillerPlayer:
                 samples_since_model += max(1, len(chunk) // 2)
             gain = duck_gain(elapsed_model)
             self.gains.append(gain)
-            mixed.extend(apply_gain(chunk, gain))
+            faded = apply_gain(chunk, gain)
+            mixed.extend(faded)
             self._note_audio()
+            if not skip_capture:
+                await self._capture_chunk(faded, clip.sample_rate)
             if gain <= 0.0 and self._model_audio_at is not None:
                 break
             if self._stop.is_set():
                 break
             await asyncio.sleep(0)
-        self.played_pcm.append(bytes(mixed))
-        sink = getattr(self.session, "output", None)
-        audio_out = getattr(sink, "audio", None) if sink is not None else None
-        capture = getattr(audio_out, "capture_frame", None)
-        if callable(capture):
-            try:
-                from livekit import rtc
-
-                data = bytes(mixed) or clip.pcm
-                samples = max(1, len(data) // 2)
-                frame = rtc.AudioFrame(
-                    data=data,
-                    sample_rate=clip.sample_rate,
-                    num_channels=1,
-                    samples_per_channel=samples,
-                )
-                result = capture(frame)
-                if inspect.isawaitable(result):
-                    await result
-            except Exception:
-                logger.exception("filler capture_frame failed")
+        self.played_pcm.append(bytes(mixed) or clip.pcm)
 
     async def wait_for_playout(self) -> None:
         if self._task is not None:

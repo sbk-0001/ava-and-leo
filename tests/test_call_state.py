@@ -114,6 +114,21 @@ def test_sydney_today_is_injected_into_prompt_block() -> None:
     assert "do not guess the weekday" in block.lower()
 
 
+def test_sydney_clock_is_injected_at_1730() -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    now = datetime(2026, 9, 15, 17, 30, tzinfo=ZoneInfo("Australia/Sydney"))
+    state = CallState(branch="shellharbour", now=now)
+    block = state.prompt_block().lower()
+    assert "5:30 pm" in block or "17:30" in block
+    assert "evening" in block
+    assert "not morning" in block
+    assert "do not invent the clock" in block
+    assert "what time it is" in block
+    assert "current_time_sydney" in block
+
+
 def test_no_confirm_without_successful_book() -> None:
     state = CallState(branch="shellharbour", today=date(2026, 9, 15))
     assert state.may_confirm_booking() is False

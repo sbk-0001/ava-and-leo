@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import random
 import re
 import wave
@@ -41,6 +42,8 @@ SAMPLE_WIDTH = 2  # int16
 MIN_POOL_VARIANTS = 4
 VOICE = "marin"
 SPEED = 0.9
+SYNTHETIC_SOURCE = "synthetic-placeholder"
+REAL_TTS_SOURCE = "openai-tts-gpt-4o-mini-tts"
 
 FILLER_POOLS: dict[str, tuple[str, ...]] = {
     "stage_1": STAGE_1,
@@ -91,6 +94,74 @@ def duration_for_text(text: str) -> float:
     return max(0.7, min(3.8, words * 0.38 / SPEED))
 
 
+def require_real_filler_bank(env: dict[str, str] | None = None) -> bool:
+    """Production default: reject synthetic-placeholder. Tests opt in/out.
+
+    FILLER_REQUIRE_REAL=1 forces the check. FILLER_REQUIRE_REAL=0 or
+    FILLER_ALLOW_SYNTHETIC=1 allows placeholders. Unset + pytest: allow.
+    Unset + live process: require real TTS.
+    """
+    environ = env if env is not None else os.environ
+    raw = str(environ.get("FILLER_REQUIRE_REAL") or "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    allow = str(environ.get("FILLER_ALLOW_SYNTHETIC") or "").strip().lower()
+    if allow in {"1", "true", "yes", "on"}:
+        return False
+    return not str(environ.get("PYTEST_CURRENT_TEST") or "").strip()
+
+
+def resample_pcm(pcm: bytes, src_rate: int, dst_rate: int = SAMPLE_RATE) -> bytes:
+    """Linear resample of int16 mono PCM. audioop is gone on 3.13+."""
+    if src_rate == dst_rate or not pcm:
+        return pcm
+    n_src = len(pcm) // SAMPLE_WIDTH
+    if n_src <= 1:
+        return pcm
+    n_dst = max(1, round(n_src * dst_rate / src_rate))
+    out = bytearray(n_dst * SAMPLE_WIDTH)
+    for i in range(n_dst):
+        x = i * (n_src - 1) / (n_dst - 1)
+        j = int(x)
+        frac = x - j
+        j2 = min(j + 1, n_src - 1)
+        a = int.from_bytes(pcm[j * 2 : j * 2 + 2], "little", signed=True)
+        b = int.from_bytes(pcm[j2 * 2 : j2 * 2 + 2], "little", signed=True)
+        value = int(a + (b - a) * frac)
+        value = max(-32767, min(32767, value))
+        out[i * 2 : i * 2 + 2] = value.to_bytes(2, "little", signed=True)
+    return bytes(out)
+
+
+def wav_bytes_to_pcm(blob: bytes, *, sample_rate: int = SAMPLE_RATE) -> bytes:
+    """Decode a WAV (or raw PCM) blob to 48 kHz mono int16."""
+    if blob[:4] != b"RIFF":
+        return blob
+    import io
+
+    with wave.open(io.BytesIO(blob), "rb") as wav:
+        channels = wav.getnchannels()
+        width = wav.getsampwidth()
+        rate = wav.getframerate()
+        frames = wav.readframes(wav.getnframes())
+    if width != SAMPLE_WIDTH:
+        raise FillerBankError("filler TTS WAV must be 16-bit PCM")
+    if channels > 1:
+        frame = channels * SAMPLE_WIDTH
+        frames = b"".join(
+            frames[i : i + SAMPLE_WIDTH] for i in range(0, len(frames), frame)
+        )
+    return resample_pcm(frames, rate, sample_rate)
+
+
+def clip_is_synthetic_placeholder(
+    text: str, pcm: bytes, *, sample_rate: int = SAMPLE_RATE
+) -> bool:
+    return pcm == synthesize_pcm(text, sample_rate=sample_rate)
+
+
 def synthesize_pcm(text: str, *, sample_rate: int = SAMPLE_RATE) -> bytes:
     """Deterministic speech-shaped PCM so CI can boot without OpenAI TTS."""
     n = int(sample_rate * duration_for_text(text))
@@ -135,6 +206,8 @@ def build_manifest(
     *,
     source: str,
     root: Path | None = None,
+    voice: str = VOICE,
+    speed: float = SPEED,
 ) -> dict[str, Any]:
     root = root or BANK_DIR
     pools: dict[str, list[dict[str, str]]] = {}
@@ -147,8 +220,8 @@ def build_manifest(
             entries.append({"text": text, "file": rel, "sha256": digest})
         pools[pool] = entries
     return {
-        "voice": VOICE,
-        "speed": SPEED,
+        "voice": voice,
+        "speed": speed,
         "sample_rate": SAMPLE_RATE,
         "source": source,
         "pools": pools,
@@ -166,8 +239,10 @@ def write_manifest(payload: dict[str, Any], *, root: Path | None = None) -> Path
 def generate_bank(
     *,
     root: Path | None = None,
-    source: str = "synthetic-placeholder",
+    source: str = SYNTHETIC_SOURCE,
     tts_pcm: dict[str, bytes] | None = None,
+    voice: str = VOICE,
+    speed: float = SPEED,
 ) -> dict[str, Any]:
     """Write one WAV per pool line. OpenAI PCM may be supplied via tts_pcm."""
     root = root or BANK_DIR
@@ -175,9 +250,13 @@ def generate_bank(
     for pool, lines in FILLER_POOLS.items():
         for text in lines:
             path = clip_path(pool, text, root=root)
-            pcm = rendered.get(text) or synthesize_pcm(text)
+            raw = rendered.get(text)
+            if raw:
+                pcm = wav_bytes_to_pcm(raw) if raw[:4] == b"RIFF" else raw
+            else:
+                pcm = synthesize_pcm(text)
             write_wav(path, pcm)
-    manifest = build_manifest(source=source, root=root)
+    manifest = build_manifest(source=source, root=root, voice=voice, speed=speed)
     write_manifest(manifest, root=root)
     return manifest
 
@@ -194,12 +273,23 @@ def load_manifest(*, root: Path | None = None) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def assert_filler_bank(*, root: Path | None = None) -> dict[str, list[FillerClip]]:
+def assert_filler_bank(
+    *,
+    root: Path | None = None,
+    require_real: bool | None = None,
+) -> dict[str, list[FillerClip]]:
     """Fail the process if any pool is missing or has fewer than 4 clips."""
     root = root or BANK_DIR
     manifest = load_manifest(root=root)
     loaded: dict[str, list[FillerClip]] = {}
     problems: list[str] = []
+    must_real = require_real if require_real is not None else require_real_filler_bank()
+    source = str(manifest.get("source") or "")
+    if must_real and source == SYNTHETIC_SOURCE:
+        problems.append(
+            f"source is {SYNTHETIC_SOURCE}; run "
+            "`uv run python scripts/generate_filler_bank.py` with OpenAI TTS"
+        )
     for pool, lines in FILLER_POOLS.items():
         entries = {
             item["text"]: item for item in (manifest.get("pools") or {}).get(pool, [])
@@ -225,6 +315,9 @@ def assert_filler_bank(*, root: Path | None = None) -> dict[str, list[FillerClip
             duration = (len(pcm) / SAMPLE_WIDTH / max(1, rate)) if pcm else 0.0
             if duration < 0.2:
                 problems.append(f"clip too short {rel}")
+                continue
+            if must_real and clip_is_synthetic_placeholder(text, pcm, sample_rate=rate):
+                problems.append(f"synthetic-placeholder pcm {rel}")
                 continue
             clips.append(
                 FillerClip(

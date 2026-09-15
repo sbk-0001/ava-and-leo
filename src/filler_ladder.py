@@ -100,6 +100,7 @@ class DispatchTrace:
     path: str = "LATENCY"
     abandoned_on_429: bool = False
     retries: int = 0
+    result_cover: bool = False
 
     @property
     def audio_before_dispatch(self) -> bool:
@@ -521,6 +522,15 @@ class FillerLadder:
                         self.trace.path = "ERROR"
                         fallback = await self._error_fallback()
                         return fallback, self.trace
+                    if (
+                        self.trace.path == "LATENCY"
+                        and isinstance(result, Mapping)
+                        and list(result.get("slots") or [])
+                    ):
+                        # Cover the model's slot-offer generation so "Hello?"
+                        # never lands in the gap after the diary returns.
+                        self.trace.result_cover = True
+                        await self.speak_stage(1)
                     return result, self.trace
 
                 if not self._pending:

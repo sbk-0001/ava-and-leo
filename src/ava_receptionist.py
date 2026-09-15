@@ -24,12 +24,15 @@ from openai.types.beta.realtime.session import TurnDetection
 from booking import (
     BookingProvider,
     empty_tool_args_result,
+    filter_past_slots,
     invalid_slot_id_result,
     is_canonical_slot_id,
+    spoken_two_slot_offer,
 )
 from call_log import CallLog
 from call_state import CallState
 from caller_store import CallerStore, get_shared_caller_store, upsert_from_booking
+from date_context import current_time_sydney as current_time_sydney_fn
 from date_context import resolve_date_phrase as resolve_date_phrase_fn
 from dead_air import DeadAirMonitor
 from desk_events import activity_packet_from_result, schedule_desk_publish
@@ -474,6 +477,13 @@ class AvaReceptionist(Agent):
         }
 
     async def on_enter(self) -> None:
+        self.state.refresh_dates()
+        try:
+            await self.update_instructions(
+                ava_instructions(self.state.branch, self.state.prompt_block())
+            )
+        except Exception:
+            logger.exception("failed to inject Sydney clock at session start")
         if self.state.kill_switch:
             self.state.escalation_flag = True
             self.state.intent = "kill_switch"
@@ -527,9 +537,24 @@ class AvaReceptionist(Agent):
             self._log_tool("resolve_date_phrase", result, {"phrase": phrase})
             return result
         self.state.refresh_dates()
-        result = resolve_date_phrase_fn(phrase, today=self.state.today)
+        result = resolve_date_phrase_fn(
+            phrase, today=self.state.today, now=self.state.now
+        )
         self.state.apply_date_resolution(result)
         self._log_tool("resolve_date_phrase", result, {"phrase": phrase})
+        return result
+
+    @function_tool()
+    async def current_time_sydney(self, context: RunContext) -> dict[str, Any]:
+        """Current Australia/Sydney clock. Use this instead of guessing.
+
+        If they ask what time it is, or whether it is morning/arvo/evening,
+        call this and speak the returned clock fact. Never invent the time.
+        """
+        del context
+        self.state.refresh_dates()
+        result = current_time_sydney_fn(now=self.state.now)
+        self._log_tool("current_time_sydney", result, {})
         return result
 
     @function_tool()
@@ -580,6 +605,26 @@ class AvaReceptionist(Agent):
                 date_range=date_range,
                 clinician=chosen,
             )
+            self.state.refresh_dates()
+            clock = self.state.now
+            if result.get("ok"):
+                result = dict(result)
+                before = list(result.get("slots") or [])
+                trimmed = filter_past_slots(before, now=clock)
+                result["slots"] = trimmed
+                dropped = len(before) - len(trimmed)
+                if dropped:
+                    result["dropped_past_slots"] = dropped
+                    result.setdefault(
+                        "note",
+                        (
+                            "Past times for today were removed. Do not offer them. "
+                            "Only speak remaining slots. Never say 8:00 or 9:30 "
+                            "if those starts are already in the past."
+                        ),
+                    )
+                if trimmed:
+                    result["offer"] = spoken_two_slot_offer(trimmed, now=clock)
             self.state.remember_availability(result)
             if str(result.get("status") or "") == "UNKNOWN":
                 result = dict(result)

@@ -11,6 +11,8 @@ import pytest
 
 from never_silent_harness import OWNER_SCENARIOS, live_audio_ready
 from never_silent_recorder import (
+    SAMPLE_RATE,
+    _wav_to_pcm,
     analyze_pcm,
     build_caller_token,
     build_dispatch_metadata,
@@ -136,6 +138,30 @@ def test_caller_token_can_publish_and_subscribe() -> None:
     assert token
     assert isinstance(token, str)
     assert len(token) > 20
+
+
+def test_wav_to_pcm_resamples_stereo_8bit_without_audioop() -> None:
+    import io
+
+    frames = 4800
+    stereo = bytearray()
+    for index in range(frames):
+        left = 128 + int(40 * math.sin(2 * math.pi * 440 * index / 16000))
+        stereo.extend((max(0, min(255, left)), 128))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as handle:
+        handle.setnchannels(2)
+        handle.setsampwidth(1)
+        handle.setframerate(16000)
+        handle.writeframes(bytes(stereo))
+    pcm = _wav_to_pcm(buf.getvalue())
+    expected = round(frames * SAMPLE_RATE / 16000)
+    assert len(pcm) == expected * 2
+    rms = (
+        sum(sample * sample for sample in struct.unpack(f"<{expected}h", pcm))
+        / expected
+    ) ** 0.5
+    assert rms > 100
 
 
 def test_write_wav_is_real_riff(tmp_path: Path) -> None:

@@ -13,7 +13,6 @@ Docs: https://docs.livekit.io/agents/server/agent-dispatch/
 from __future__ import annotations
 
 import asyncio
-import audioop
 import json
 import logging
 import os
@@ -325,7 +324,69 @@ async def synthesize_pcm(text: str) -> bytes:
     return _wav_to_pcm(response.content)
 
 
+def _pcm_to_16bit(frames: bytes, width: int) -> bytes:
+    """Convert unsigned-8 / 16 / 24 / 32-bit PCM to signed 16-bit little-endian."""
+    if width == 2:
+        return frames
+    if width == 1:
+        samples = [((byte - 128) << 8) for byte in frames]
+        return struct.pack(f"<{len(samples)}h", *samples)
+    if width == 3:
+        count = len(frames) // 3
+        samples = []
+        for index in range(count):
+            raw = frames[index * 3 : index * 3 + 3]
+            value = int.from_bytes(raw, "little", signed=True)
+            samples.append(max(-32768, min(32767, value >> 8)))
+        return struct.pack(f"<{count}h", *samples)
+    if width == 4:
+        count = len(frames) // 4
+        samples = struct.unpack(f"<{count}i", frames[: count * 4])
+        clipped = [max(-32768, min(32767, sample >> 16)) for sample in samples]
+        return struct.pack(f"<{count}h", *clipped)
+    raise ValueError(f"unsupported sample width: {width}")
+
+
+def _to_mono(frames: bytes, channels: int) -> bytes:
+    if channels <= 1:
+        return frames
+    frame_count = len(frames) // (2 * channels)
+    packed = frames[: frame_count * channels * 2]
+    samples = struct.unpack(f"<{frame_count * channels}h", packed)
+    mono = []
+    for index in range(frame_count):
+        total = sum(samples[index * channels + channel] for channel in range(channels))
+        mono.append(int(max(-32768, min(32767, total // channels))))
+    return struct.pack(f"<{frame_count}h", *mono)
+
+
+def _resample_mono16(frames: bytes, in_rate: int, out_rate: int) -> bytes:
+    if in_rate == out_rate:
+        return frames
+    incoming = len(frames) // 2
+    if incoming == 0:
+        return b""
+    samples = struct.unpack(f"<{incoming}h", frames)
+    outgoing = max(1, round(incoming * out_rate / in_rate))
+    if incoming == 1:
+        return struct.pack(f"<{outgoing}h", *([samples[0]] * outgoing))
+    converted: list[int] = []
+    scale = (incoming - 1) / (outgoing - 1)
+    for index in range(outgoing):
+        source = index * scale
+        low = int(source)
+        high = min(low + 1, incoming - 1)
+        frac = source - low
+        value = samples[low] * (1.0 - frac) + samples[high] * frac
+        converted.append(int(max(-32768, min(32767, round(value)))))
+    return struct.pack(f"<{outgoing}h", *converted)
+
+
 def _wav_to_pcm(blob: bytes) -> bytes:
+    """Decode a WAV blob to 24 kHz 16-bit mono PCM without stdlib audioop.
+
+    ``audioop`` was removed in Python 3.13, and CI runs 3.14.
+    """
     import io
 
     with wave.open(io.BytesIO(blob), "rb") as handle:
@@ -333,13 +394,9 @@ def _wav_to_pcm(blob: bytes) -> bytes:
         width = handle.getsampwidth()
         rate = handle.getframerate()
         frames = handle.readframes(handle.getnframes())
-    if width != 2:
-        frames = audioop.lin2lin(frames, width, 2)
-    if channels > 1:
-        frames = audioop.tomono(frames, 2, 0.5, 0.5)
-    if rate != SAMPLE_RATE:
-        frames, _ = audioop.ratecv(frames, 2, 1, rate, SAMPLE_RATE, None)
-    return frames
+    frames = _pcm_to_16bit(frames, width)
+    frames = _to_mono(frames, channels)
+    return _resample_mono16(frames, rate, SAMPLE_RATE)
 
 
 async def _publish_pcm(source: Any, pcm: bytes, tape: PcmTape) -> None:

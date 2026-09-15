@@ -17,6 +17,7 @@ from booking import BookingProvider
 from call_log import CallLog
 from call_state import CallState
 from persona import ava_instructions, get_branch, quote_fee, resolve_tool_branch
+from realtime_hygiene import maybe_trim_realtime_context
 from sip_utils import find_sip_participant
 
 logger = logging.getLogger("ava")
@@ -154,6 +155,10 @@ class AvaReceptionist(Agent):
             )
         except Exception:
             logger.exception("failed to refresh CallState instructions")
+        try:
+            await maybe_trim_realtime_context(self)
+        except Exception:
+            logger.exception("realtime context trim failed; CallState still intact")
 
     async def _do_transfer(self, branch_id: str, reason: str) -> dict[str, Any]:
         transfer_to = transfer_destination_for_branch(

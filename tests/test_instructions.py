@@ -19,6 +19,9 @@ def test_instructions_file_is_verbatim() -> None:
     assert text.rstrip().endswith(CALIBRATION_END)
     assert text.count("{{BRANCH_NAME}}") == 5
     assert "which branch they\nwant" in text or "which branch they want" in text
+    assert "one or two sentences" in text.lower()
+    assert "long call" in text.lower()
+    assert "do not recap" in text.lower()
 
 
 def test_branch_name_is_interpolated_not_rewritten() -> None:

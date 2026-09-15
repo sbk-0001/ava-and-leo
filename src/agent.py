@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import textwrap
@@ -13,7 +14,9 @@ from livekit.agents import (
     AgentSession,
     ConversationItemAddedEvent,
     EndpointingOptions,
+    ErrorEvent,
     JobContext,
+    JobProcess,
     PreemptiveGenerationOptions,
     TurnHandlingOptions,
     cli,
@@ -28,6 +31,11 @@ from booking import get_shared_booking_provider
 from call_log import CallLog, iso, log_dir_from_env, supabase_turn_row
 from call_state import CallState, kill_switch_enabled
 from persona import CANONICAL_PERSONAS, canonical_persona, get_branch, resolve_persona
+from realtime_hygiene import (
+    RateLimitRecovery,
+    is_rate_limit_error,
+    maybe_trim_realtime_context,
+)
 from sip_utils import (
     SIP_CALL_ERRORS,
     branch_from_participant,
@@ -40,6 +48,10 @@ from sip_utils import (
 logger = logging.getLogger("agent")
 
 load_dotenv(".env.local")
+
+# Cached at process start via prewarm so shutdown does not import supabase
+# on the event loop. Docs: https://docs.livekit.io/agents/server/options/#prewarm-function
+_supabase_create_client = None
 
 # Production model stack (provider plugins, billed via our own API keys).
 ASSEMBLYAI_STT_MODEL = "universal-3-5-pro"  # AssemblyAI's best general streaming model
@@ -60,6 +72,33 @@ PERSONAS = {
 
 GENERIC_ENV_VARS = ("ASSEMBLYAI_API_KEY", "GROQ_API_KEY", "CARTESIA_API_KEY")
 AVA_ENV_VARS = ("OPENAI_API_KEY",)
+
+
+def _get_supabase_create_client():
+    """Return create_client, importing only if prewarm did not already load it."""
+    global _supabase_create_client
+    if _supabase_create_client is not None:
+        return _supabase_create_client
+    from supabase import create_client
+
+    _supabase_create_client = create_client
+    return _supabase_create_client
+
+
+def prewarm(proc: JobProcess) -> None:
+    """Import supabase at process start so call-log shutdown does not block.
+
+    Docs: https://docs.livekit.io/agents/server/options/#prewarm-function
+    """
+    global _supabase_create_client
+    try:
+        from supabase import create_client
+
+        _supabase_create_client = create_client
+        proc.userdata["supabase_create_client"] = create_client
+        logger.info("prewarmed supabase client factory")
+    except Exception:
+        logger.exception("supabase prewarm failed")
 
 
 def _require_env(names: tuple[str, ...]) -> None:
@@ -227,8 +266,7 @@ def _save_call_to_supabase(
         print(f"[call_log] failed to save local transcript: {exc}")
 
     try:
-        from supabase import create_client
-
+        create_client = _get_supabase_create_client()
         supabase_url = os.environ["SUPABASE_URL"]
         supabase_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
         supabase = create_client(supabase_url, supabase_key)
@@ -437,6 +475,7 @@ def _room_options(*, env: Mapping[str, str] | None = None) -> room_io.RoomOption
 
 
 server = AgentServer()
+server.setup_fnc = prewarm
 
 
 @server.rtc_session(agent_name="ava-and-leo")
@@ -537,6 +576,22 @@ async def my_agent(ctx: JobContext):
         session = _build_generic_session(persona["voice_id"])
 
     _register_latency_logging(session)
+    rate_limit = RateLimitRecovery()
+
+    async def _trim_on_rate_limit() -> None:
+        if persona_key == "ava":
+            await maybe_trim_realtime_context(agent)
+
+    @session.on("error")
+    def _on_realtime_error(ev: ErrorEvent) -> None:
+        err = getattr(ev, "error", ev)
+        if not is_rate_limit_error(err):
+            return
+        logger.warning("openai realtime rate_limit_exceeded: %s", err)
+        recoverable = getattr(err, "recoverable", None)
+        if recoverable is False:
+            err.recoverable = True
+        rate_limit.schedule(session, trim=_trim_on_rate_limit)
 
     @session.on("conversation_item_added")
     def _on_transcript(ev: ConversationItemAddedEvent) -> None:
@@ -549,9 +604,13 @@ async def my_agent(ctx: JobContext):
         created = getattr(item, "created_at", None)
         stamp = iso(created) if isinstance(created, datetime) else iso()
         call_log.add_turn(role=item.role, content=text, timestamp=stamp)
+        if item.role == "assistant":
+            rate_limit.reset()
 
     async def on_shutdown() -> None:
-        _save_call_to_supabase(session, ctx, agent_name, started_at, call_log)
+        await asyncio.to_thread(
+            _save_call_to_supabase, session, ctx, agent_name, started_at, call_log
+        )
 
     ctx.add_shutdown_callback(on_shutdown)
 

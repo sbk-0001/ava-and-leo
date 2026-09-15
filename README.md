@@ -24,9 +24,11 @@ Spoken identity is the **verbatim** block in [`src/instructions/ava_receptionist
 Ava stays on OpenAI Realtime speech-to-speech (`marin`). Settings aimed at human, interruptible phone turns (verified against [OpenAI Realtime turn detection](https://docs.livekit.io/agents/models/realtime/plugins/openai/#turn-detection) and [interruption in realtime mode](https://docs.livekit.io/agents/logic/turns/#interruption-in-realtime-mode)):
 
 - **Server VAD** with `silence_duration_ms=500` (450–550ms window) and `interrupt_response=True` so the caller can cut her off mid-word
-- Speech rate `speed=0.9`; temperature `0.95` (0.9–1.0). Response length is not capped tight
+- Speech rate `speed=0.9`; temperature `0.95` (0.9–1.0)
 - `AgentSession` `turn_detection="realtime_llm"` with interruptions enabled
 - Every tool call fires a filler utterance the same turn (`generate_reply` cover speech) so there is no dead air
+- After ~20 Realtime conversation items, older turns are truncated (`ChatContext.truncate` + `update_chat_ctx`). **`CallState` (branch, name, mobile, booking) is not wiped** — it is re-injected as instructions and as a compact recap
+- On `rate_limit_exceeded`, Ava covers ("just a sec"), trims, and retries with backoff instead of hanging silent
 - Target: under 800ms to first audio each turn
 
 ## Noise cancellation (Call Ava and SIP)
@@ -121,7 +123,17 @@ Inbound DID mapping uses `sip.trunkPhoneNumber` (the number the caller dialled).
 
 Kill-switch: `AVA_KILL_SWITCH=1` makes `transfer_to_human` fire on enter. `end_call` deletes the LiveKit room (or shuts the job down). Both are wired, not stubs.
 
-Call logs: every turn gets a UTC timestamp (never NULL) under `AVA_CALL_LOG_DIR` (default `.data/call_logs`) and, if configured, Supabase `ava_transcript_turns.created_at`.
+Call logs: every turn gets a UTC timestamp (never NULL) under `AVA_CALL_LOG_DIR` (default `.data/call_logs`) and, if configured, Supabase `ava_transcript_turns.created_at`. The supabase client is imported in the agent **prewarm** so shutdown does not block the event loop on a cold import.
+
+## OpenAI Realtime token limits (long demos)
+
+A chatty 10–15 minute call can hit the OpenAI Realtime **tokens-per-minute (TPM)** budget. Observed on a live call: late replies jumped to 12–15s with:
+
+```
+RealtimeError: response failed: [tokens] rate_limit_exceeded
+```
+
+That is usage-tier TPM, not a bug in barge-in. This agent reduces pressure by trimming older Realtime items and keeping booking facts in `CallState`. For long live demos, **raise the OpenAI Realtime TPM limit** on the project (platform.openai.com → Limits / usage tier). There is no client-side TPM override; `OPENAI_REALTIME_TPM` in `.env.example` is a reminder only.
 
 ## Run the agent only
 
@@ -160,7 +172,7 @@ On outbound, Ava waits for the callee to speak first. On inbound, Ava greets as 
 ## Tests
 
 ```bash
-uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py tests/test_room_options.py tests/test_call_state.py tests/test_booking.py tests/test_instructions.py tests/test_call_log.py tests/test_demo_harness.py -v
+uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py tests/test_room_options.py tests/test_call_state.py tests/test_booking.py tests/test_instructions.py tests/test_call_log.py tests/test_demo_harness.py tests/test_realtime_hygiene.py -v
 uv run pytest            # includes generic-pipeline evals; needs LIVEKIT_* in CI
 uv run python src/demo_harness.py   # writes demos/thursday/*.md
 ```
@@ -176,6 +188,7 @@ src/call_state.py                    # branch, asks, urgency, kill-switch
 src/booking.py                       # BookingProvider + memory + Zavy360 stub
 src/persona.py                       # brief-only facts + fee table + instruction loader
 src/ava_receptionist.py              # tools (availability, book, cancel+$50, transfer, end_call)
+src/realtime_hygiene.py              # Realtime context trim + TPM rate-limit recovery
 src/call_log.py                      # timestamped replayable transcripts
 src/practice.py                      # in-memory diary used by memory provider + portal
 src/demo_harness.py                  # Thursday scenarios without live SIP

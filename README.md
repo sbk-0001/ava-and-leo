@@ -19,12 +19,28 @@ Ava's spoken style, branch facts, fee catalogue, and tool rules live in [`src/pe
 
 ## Low-latency Realtime (not zero latency)
 
-Ava stays on OpenAI Realtime speech-to-speech. Settings aimed at snappy, interruptible phone turns (verified against [OpenAI Realtime turn detection](https://docs.livekit.io/agents/models/realtime/plugins/openai/#turn-detection) and [interruption in realtime mode](https://docs.livekit.io/agents/logic/turns/#interruption-in-realtime-mode)):
+Ava stays on OpenAI Realtime speech-to-speech (`marin`). Settings aimed at human, interruptible phone turns (verified against [OpenAI Realtime turn detection](https://docs.livekit.io/agents/models/realtime/plugins/openai/#turn-detection) and [interruption in realtime mode](https://docs.livekit.io/agents/logic/turns/#interruption-in-realtime-mode)):
 
-- Server VAD with `silence_duration_ms=400` and `threshold=0.7` (telephony-friendly)
+- Semantic VAD with `eagerness="medium"` (documented default; less likely to cut the caller off mid-sentence)
 - `interrupt_response=True` so the caller can barge in
+- `temperature=0.9` for slightly more natural variation
 - `AgentSession` `turn_detection="realtime_llm"` with interruptions enabled
-- Spoken replies kept to one or two sentences; parking/hours/dentists are instant facts (no tool round-trip before speaking)
+- Spoken replies kept to one idea per turn; parking/hours/dentists are instant facts (no tool round-trip before speaking)
+- No SSML or `[laughs]` tags — Realtime marin cannot render them
+
+## Noise cancellation (Call Ava and SIP)
+
+Default is LiveKit Cloud **Krisp BVC** on web participants and **BVCTelephony** on SIP. That is the [documented RoomOptions path](https://docs.livekit.io/transport/media/noise-cancellation/) and does not use the ai-coustics enhancer.
+
+Do **not** enable ai-coustics unless you have a license. `ai_coustics.audio_enhancement` without valid enhancer auth previously hung `session.start` with **0 published audio tracks** (silent Ava on the portal). Missing auth now fails soft: Ava still publishes audio.
+
+| `AVA_NOISE_CANCELLATION` | Effect |
+|--------------------------|--------|
+| unset / `krisp` | Krisp BVC (web) / BVCTelephony (SIP). Safe default. |
+| `off` | Empty `RoomOptions()` — no filter. Use this if a filter ever silences Ava. |
+| `ai_coustics` | QUAIL_VF_S **only** when `AI_COUSTICS_LICENSE_KEY` is set. Otherwise falls back to Krisp and logs a warning. |
+
+Requires `livekit-plugins-noise-cancellation` (already in this project). LiveKit Cloud bills Krisp NC on the agent input path.
 
 ## Dev setup
 
@@ -137,11 +153,11 @@ On outbound, Ava waits for the callee to speak first. On inbound, Ava greets as 
 ## Tests
 
 ```bash
-uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py -v
+uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py tests/test_room_options.py -v
 uv run pytest            # includes generic-pipeline evals; needs LIVEKIT_* in CI
 ```
 
-Unit tests cover persona switching, Ava naming, human VOICE_INSTRUCTIONS, branch facts (parking/hours/dentists), canned fees, DID mapping (including a MagicMock console participant), mock book/reschedule/cancel `confirmed=true`, and the marin voice default.
+Unit tests cover persona switching, Ava naming, human VOICE_INSTRUCTIONS, Illawarra Dentists greeting, Krisp noise-cancellation gating, branch facts (parking/hours/dentists), canned fees, DID mapping (including a MagicMock console participant), mock book/reschedule/cancel `confirmed=true`, and the marin voice default.
 
 ## Layout
 

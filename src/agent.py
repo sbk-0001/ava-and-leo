@@ -1,6 +1,7 @@
 import logging
 import os
 import textwrap
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,7 +21,7 @@ from livekit.agents import (
     room_io,
 )
 from livekit.agents.llm import ChatMessage
-from livekit.plugins import ai_coustics, assemblyai, cartesia, groq
+from livekit.plugins import assemblyai, cartesia, groq
 
 from ava_receptionist import AvaReceptionist, inbound_greeting_instructions
 from persona import CANONICAL_PERSONAS, canonical_persona, resolve_persona
@@ -332,12 +333,79 @@ def _build_ava_session() -> AgentSession:
     )
 
 
-def _room_options() -> room_io.RoomOptions:
+def resolve_noise_cancellation(
+    *,
+    env: Mapping[str, str] | None = None,
+):
+    """Krisp BVC by default. Never attach ai-coustics without a license key.
+
+    Enabling ai_coustics.audio_enhancement without valid enhancer auth previously
+    hung session.start with 0 published audio tracks (silent Ava on Call Ava).
+    Krisp BVC / BVCTelephony are local LiveKit Cloud filters and do not use that
+    enhancer path.
+    Docs: https://docs.livekit.io/transport/media/noise-cancellation/
+          https://docs.livekit.io/agents/logic/sessions/
+    """
+    environ = env if env is not None else os.environ
+    mode = str(environ.get("AVA_NOISE_CANCELLATION", "krisp")).strip().lower()
+    if mode in {"", "off", "0", "false", "none", "disabled"}:
+        return None
+    if mode in {"ai_coustics", "aicoustics", "quail", "ai-coustics"}:
+        license_key = str(environ.get("AI_COUSTICS_LICENSE_KEY", "")).strip()
+        if license_key:
+            try:
+                from livekit.plugins import ai_coustics
+            except ImportError:
+                logger.warning(
+                    "AVA_NOISE_CANCELLATION=ai_coustics but livekit-plugins-ai-coustics "
+                    "is not installed; attaching no filter so Ava still publishes audio."
+                )
+                return None
+            return ai_coustics.audio_enhancement(
+                model=ai_coustics.EnhancerModel.QUAIL_VF_S,
+                auth=ai_coustics.Auth.ai_coustics_api(license_key=license_key),
+            )
+        logger.warning(
+            "AVA_NOISE_CANCELLATION=ai_coustics ignored without "
+            "AI_COUSTICS_LICENSE_KEY (missing enhancer auth previously silenced "
+            "Call Ava). Falling back to Krisp BVC."
+        )
+        mode = "krisp"
+    if mode in {"krisp", "bvc", "on", "true", "1", "yes"}:
+        try:
+            from livekit.plugins import noise_cancellation
+        except ImportError:
+            logger.warning(
+                "livekit-plugins-noise-cancellation is not installed; attaching "
+                "no filter so Ava still publishes audio."
+            )
+            return None
+
+        def _select(params: Any):
+            participant = getattr(params, "participant", None)
+            if is_sip_participant(participant):
+                return noise_cancellation.BVCTelephony()
+            return noise_cancellation.BVC()
+
+        return _select
+    logger.warning(
+        "Unknown AVA_NOISE_CANCELLATION=%r; attaching no filter.",
+        mode,
+    )
+    return None
+
+
+def _room_options(*, env: Mapping[str, str] | None = None) -> room_io.RoomOptions:
+    """Attach noise cancellation only when the filter is known-safe.
+
+    Empty RoomOptions() is the path that keeps Call Ava publishing audio.
+    """
+    filt = resolve_noise_cancellation(env=env)
+    if filt is None:
+        return room_io.RoomOptions()
     return room_io.RoomOptions(
         audio_input=room_io.AudioInputOptions(
-            noise_cancellation=ai_coustics.audio_enhancement(
-                model=ai_coustics.EnhancerModel.QUAIL_VF_S
-            ),
+            noise_cancellation=filt,
         ),
     )
 

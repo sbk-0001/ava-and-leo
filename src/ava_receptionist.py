@@ -43,21 +43,22 @@ def resolve_ava_voice(env: Mapping[str, str] | None = None) -> str:
 
 
 def ava_realtime_model() -> openai.realtime.RealtimeModel:
-    """OpenAI Realtime speech-to-speech model for Ava telephony.
+    """OpenAI Realtime speech-to-speech model for Ava.
 
-    Low-latency path: server VAD with a tighter silence window (telephony-friendly)
-    and interrupt_response so the caller can barge in. Do not claim zero latency.
+    Semantic VAD (documented default) so turns close when the caller has
+    finished speaking, not after a tight silence window. interrupt_response
+    stays on so they can barge in. Temperature a little above the 0.8 default
+    for more natural variation. Do not claim zero latency.
     Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/#turn-detection
           https://docs.livekit.io/agents/logic/turns/#interruption-in-realtime-mode
     """
     return openai.realtime.RealtimeModel(
         model=AVA_REALTIME_MODEL,
         voice=resolve_ava_voice(),
+        temperature=0.9,
         turn_detection=TurnDetection(
-            type="server_vad",
-            threshold=0.7,
-            prefix_padding_ms=300,
-            silence_duration_ms=400,
+            type="semantic_vad",
+            eagerness="medium",
             create_response=True,
             interrupt_response=True,
         ),
@@ -346,10 +347,13 @@ class AvaReceptionist(Agent):
 def inbound_greeting_instructions(branch_id: str) -> str:
     del branch_id  # DID/portal hint is not the inbound brand.
     return (
-        "Sound warm and human, like a real receptionist picking up — not a script. "
-        f"Greet the caller as Ava at {GROUP_NAME}. They reached the Illawarra "
-        "Dentists group number, not one clinic. Do not greet as Shellharbour "
-        "Dentists, Dapto Dentists, or Woonona Dentists. One warm short sentence "
-        "plus one question. Offer to help with a booking or a question, then "
-        "help them choose among Shellharbour, Dapto, or Woonona. Do not say G'day."
+        "Sound like a real receptionist just picking up — slight natural energy, "
+        "not a script or a menu. Greet the caller as Ava at "
+        f"{GROUP_NAME}. They reached the Illawarra Dentists group number, not "
+        "one clinic. Do not greet as Shellharbour Dentists, Dapto Dentists, or "
+        "Woonona Dentists. One warm short sentence plus one question. Do not "
+        "list all three clinics in the opening. Offer to help, then ask what "
+        "they need or where they are so you can choose Shellharbour, Dapto, or "
+        "Woonona conversationally. Do not say G'day. Plain speech only — no "
+        "lists, no SSML, no stage directions."
     )

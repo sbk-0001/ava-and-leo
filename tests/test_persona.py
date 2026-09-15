@@ -191,6 +191,25 @@ def test_voice_instructions_include_human_affect() -> None:
     assert "ai" in spoken
     assert "one question" in spoken
     assert "one or two sentences" in spoken or "one to two" in spoken
+    assert "one idea" in spoken
+    assert "oh right" in spoken
+    assert "lovely" in spoken
+    assert "softer" in spoken or "slower" in spoken
+    assert "post-op" in spoken or "post op" in spoken
+    assert (
+        "list dump" in spoken or "robotic list" in spoken or "not a robotic" in spoken
+    )
+    assert "ssml" in spoken
+    assert "[laughs]" in spoken or "stage direction" in spoken
+    assert "acknowledg" in spoken
+
+
+def test_voice_instructions_forbid_ssml_tags() -> None:
+    """Realtime marin cannot render SSML or [laughs] tags — instruct affect in prose."""
+    spoken = VOICE_INSTRUCTIONS.lower()
+    assert "plain speech" in spoken
+    assert "never" in spoken and "ssml" in spoken
+    assert "stage direction" in spoken or "stage-direction" in spoken
 
 
 def test_backend_instructions_policy_intact() -> None:

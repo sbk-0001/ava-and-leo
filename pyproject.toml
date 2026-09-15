@@ -18,6 +18,7 @@ dependencies = [
     "supabase>=2.31.0",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
+    "livekit-plugins-noise-cancellation>=0.3.0",
 ]
 
 [dependency-groups]

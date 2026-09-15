@@ -56,12 +56,15 @@ def test_inbound_greeting_is_ava_and_human() -> None:
     assert "dapto" in lowered
     assert "woonona" in lowered
     assert "warm" in lowered or "human" in lowered
-    assert "booking" in lowered or "book" in lowered
+    assert "booking" in lowered or "book" in lowered or "help" in lowered
     assert "one" in lowered and "question" in lowered
     assert "short" in lowered
+    assert "script" in lowered or "menu" in lowered
+    assert "list" in lowered
+    assert "ssml" in lowered or "stage" in lowered
     assert "debto" not in lowered
     assert "winona" not in lowered
-    assert len(text) < 500
+    assert len(text) < 750
 
 
 def test_inbound_greeting_identity_ignores_mapped_branch() -> None:
@@ -84,16 +87,20 @@ def test_ava_session_uses_realtime_llm_and_interruptions() -> None:
     assert "True" in source
 
 
-def test_realtime_model_enables_barge_in_and_snappy_vad() -> None:
-    """OpenAI Realtime turn detection must allow barge-in and close turns quickly.
+def test_realtime_model_enables_barge_in_and_human_turns() -> None:
+    """OpenAI Realtime turn detection should feel human and still allow barge-in.
 
+    Semantic VAD is the documented default: less likely to cut the caller off
+    mid-sentence. interrupt_response stays on so they can barge in.
     Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/#turn-detection
           https://docs.livekit.io/agents/logic/turns/#interruption-in-realtime-mode
     """
     source = inspect.getsource(ava_realtime_model)
     assert "interrupt_response" in source
     assert "True" in source
-    assert "server_vad" in source
-    assert "silence_duration_ms" in source
-    assert "400" in source
+    assert "semantic_vad" in source
+    assert "eagerness" in source
+    assert "medium" in source
     assert "create_response" in source
+    assert "ssml" not in source.lower()
+    assert "temperature" in source

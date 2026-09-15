@@ -20,6 +20,7 @@ const FIELD_LABELS = {
   phone: "Phone",
   open_slots: "Open slots",
   matches: "Matches",
+  failure_reason: "Failure",
 };
 
 const $ = (id) => document.getElementById(id);

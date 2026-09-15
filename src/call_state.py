@@ -11,9 +11,11 @@ import random
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from typing import Any, Literal
+from zoneinfo import ZoneInfo
 
-from persona import DEFAULT_BRANCH_ID, get_branch
+from persona import BRANCHES, DEFAULT_BRANCH_ID, get_branch
 from phrase_pools import ACKS, BARGE_IN_RESUME, CLOSINGS, OPENINGS, pick_from_pool
 
 MAX_ASKS = 3
@@ -41,7 +43,19 @@ SUBURB_OFFERS: dict[str, str] = {
     "mount warrigal": "shellharbour",
 }
 
+SYDNEY = ZoneInfo("Australia/Sydney")
 _MOBILE_RE = re.compile(r"^(?:\+?61|0)4\d{8}$")
+_DR_NAME_RE = re.compile(r"\bdr\.?\s+([a-z]+(?:\s+[a-z]+)?)", re.I)
+
+NOT_LOCKED_SAY = (
+    "This booking is not locked yet. Do not say you're all set, confirmed, "
+    "booked, or similar. Say it is not locked yet and offer another slot "
+    "from check_availability, or try again."
+)
+LOCKED_SAY = (
+    "Booking is locked. Confirm name, weekday, date, time and dentist once. "
+    "You may say they're all set."
+)
 
 _LIFE_THREATENING = (
     "can't swallow",
@@ -102,6 +116,76 @@ def offer_branch_for_suburb(suburb: str, current_branch: str) -> str | None:
     return None
 
 
+def sydney_today(now: date | None = None) -> date:
+    return now or datetime.now(SYDNEY).date()
+
+
+def _ordinal(day: int) -> str:
+    if 10 <= day % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    return f"{day}{suffix}"
+
+
+def format_sydney_date(day: date) -> str:
+    """Spoken Australia/Sydney date, e.g. Tuesday the 15th of September 2026."""
+    return f"{day.strftime('%A')} the {_ordinal(day.day)} of {day.strftime('%B %Y')}"
+
+
+def named_dentists() -> tuple[str, ...]:
+    names: list[str] = []
+    seen: set[str] = set()
+    for branch in BRANCHES.values():
+        for name in (*branch.dentists, *(c.name for c in branch.clinicians)):
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            names.append(name)
+    return tuple(names)
+
+
+def match_clinician(text: str) -> str | None:
+    """Optional clinician filter when the caller names a dentist."""
+    if not text:
+        return None
+    lowered = text.lower()
+    dentists = named_dentists()
+    for name in dentists:
+        if name.lower() in lowered:
+            return name
+        bare = re.sub(r"^dr\.?\s+", "", name.lower())
+        parts = [part for part in bare.split() if len(part) > 3]
+        if any(part in lowered for part in parts):
+            return name
+    match = _DR_NAME_RE.search(text)
+    if not match:
+        return None
+    token = match.group(1).lower()
+    for name in dentists:
+        if token in name.lower():
+            return name
+    return match.group(0).strip()
+
+
+def booking_is_locked(result: Mapping[str, Any] | None) -> bool:
+    if not result:
+        return False
+    return bool(result.get("ok") and result.get("confirmed"))
+
+
+def apply_confirmation_gate(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Stamp a book/reschedule result so Ava cannot verbally confirm a miss."""
+    payload = dict(result)
+    if booking_is_locked(payload):
+        payload.setdefault("say", LOCKED_SAY)
+        return payload
+    payload["confirmed"] = False
+    payload["say"] = NOT_LOCKED_SAY
+    return payload
+
+
 def classify_urgency(text: str) -> UrgencyLevel:
     lowered = text.lower()
     if any(needle in lowered for needle in _LIFE_THREATENING):
@@ -140,9 +224,24 @@ class CallState:
     stock_phrases_used: list[str] = field(default_factory=list)
     last_dispatch_trace: Any | None = None
     last_availability_slots: list[dict[str, Any]] = field(default_factory=list)
+    last_book_result: dict[str, Any] | None = None
+    preferred_clinician: str | None = None
+    today: date = field(default_factory=sydney_today)
     barge_in_pending: bool = False
     last_barge_in_resume: str | None = None
     phrase_rng: random.Random = field(default_factory=random.Random)
+
+    @property
+    def tomorrow(self) -> date:
+        return self.today + timedelta(days=1)
+
+    @property
+    def today_spoken(self) -> str:
+        return format_sydney_date(self.today)
+
+    @property
+    def tomorrow_spoken(self) -> str:
+        return format_sydney_date(self.tomorrow)
 
     def remember_availability(self, result: Mapping[str, Any]) -> None:
         """Keep the last diary result so a TPM recovery can offer times, not re-search."""
@@ -150,6 +249,23 @@ class CallState:
         self.last_availability_slots = slots[:8]
         if slots:
             self.proposed_slot = slots[0].get("slot_id") or self.proposed_slot
+
+    def record_book_result(self, result: Mapping[str, Any]) -> dict[str, Any]:
+        """Gate verbal confirmation on the last book_appointment result."""
+        gated = apply_confirmation_gate(result)
+        self.last_book_result = gated
+        if booking_is_locked(gated):
+            slot_id = gated.get("slot_id")
+            if slot_id:
+                self.confirmed_slot = str(slot_id)
+            self.intent = "booked"
+        return gated
+
+    def may_confirm_booking(self) -> bool:
+        return booking_is_locked(self.last_book_result)
+
+    def may_offer_times(self) -> bool:
+        return bool(self.last_availability_slots)
 
     @property
     def branch_name(self) -> str:
@@ -283,6 +399,10 @@ class CallState:
         if any(phrase in lowered for phrase in botish):
             self.bot_ask_count += 1
 
+        clinician = match_clinician(text)
+        if clinician:
+            self.preferred_clinician = clinician
+
     def may_book(self) -> bool:
         return self.urgency_level != "emergency_000" and not (
             self.escalation_flag and self.urgency_level == "emergency_000"
@@ -305,9 +425,17 @@ class CallState:
             f"- is_existing_patient: {self.is_existing_patient}\n"
             f"- intent: {self.intent or 'unknown'}\n"
             f"- appointment_type: {self.appointment_type or 'unknown'}\n"
+            f"- today (Australia/Sydney): {self.today_spoken} "
+            f"(ISO {self.today.isoformat()}). Tomorrow is {self.tomorrow_spoken} "
+            f"(ISO {self.tomorrow.isoformat()}).\n"
             f"- proposed_slot: {self.proposed_slot or 'none'}\n"
             f"- last_offer_slots: {self._offer_summary()}\n"
+            f"- preferred_clinician: {self.preferred_clinician or 'none'}\n"
             f"- confirmed_slot: {self.confirmed_slot or 'none'}\n"
+            f"- last_book_ok: {bool((self.last_book_result or {}).get('ok'))}\n"
+            f"- last_book_confirmed: {bool((self.last_book_result or {}).get('confirmed'))}\n"
+            f"- last_book_reason: {(self.last_book_result or {}).get('reason') or 'none'}\n"
+            f"- booking_locked: {self.may_confirm_booking()}\n"
             f"- urgency_level: {self.urgency_level}\n"
             f"- escalation_flag: {self.escalation_flag}\n"
             f"- turn_count: {self.turn_count}\n"
@@ -325,8 +453,17 @@ class CallState:
             "- If stop_asking_mobile: do not ask for the mobile again.\n"
             "- If barge_in_resume is set: start with that phrase. Never restart the "
             "cut-off sentence.\n"
+            "- If last_offer_slots is none: do not name any clock time or diary "
+            "slot. Call check_availability first. Only speak date, time, and "
+            "clinician from those slot objects.\n"
             "- If last_offer_slots is set: offer those times. Do not search again "
-            "unless they ask for a different day or dentist."
+            "unless they ask for a different day or dentist.\n"
+            "- Never say you're all set, confirmed, booked, or similar unless "
+            "booking_locked is true (last book_appointment returned ok true and "
+            "confirmed true). If it failed (slot_gone / invalid_slot_id), say "
+            "the time is not locked yet.\n"
+            "- If preferred_clinician is set, pass it to check_availability.\n"
+            "- Use the Sydney today/tomorrow lines above. Do not guess the weekday."
         )
 
     def _offer_summary(self) -> str:
@@ -353,6 +490,9 @@ class CallState:
             "appointment_type": self.appointment_type,
             "proposed_slot": self.proposed_slot,
             "confirmed_slot": self.confirmed_slot,
+            "preferred_clinician": self.preferred_clinician,
+            "today": self.today.isoformat(),
+            "booking_locked": self.may_confirm_booking(),
             "urgency_level": self.urgency_level,
             "escalation_flag": self.escalation_flag,
             "turn_count": self.turn_count,

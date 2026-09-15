@@ -1,11 +1,17 @@
 """CallState is the single source of truth — hard ask counters, DID branch, urgency."""
 
+from datetime import date
+
 from call_state import (
     MAX_ASKS,
+    NOT_LOCKED_SAY,
     CallState,
+    apply_confirmation_gate,
     classify_urgency,
+    format_sydney_date,
     is_valid_au_mobile,
     kill_switch_enabled,
+    match_clinician,
     offer_branch_for_suburb,
 )
 
@@ -93,3 +99,92 @@ def test_bot_ask_count_increments() -> None:
     state.observe_user_text("Are you a real person?")
     state.observe_user_text("No but are you a bot?")
     assert state.bot_ask_count == 2
+
+
+def test_sydney_today_is_injected_into_prompt_block() -> None:
+    state = CallState(branch="shellharbour", today=date(2026, 9, 15))
+    assert state.today.weekday() == 1  # Tuesday
+    assert format_sydney_date(state.today) == "Tuesday the 15th of September 2026"
+    block = state.prompt_block()
+    assert "Tuesday the 15th of September 2026" in block
+    assert "2026-09-15" in block
+    assert "Wednesday the 16th of September 2026" in block
+    assert "2026-09-16" in block
+    assert "Monday the 14th" not in block
+    assert "do not guess the weekday" in block.lower()
+
+
+def test_no_confirm_without_successful_book() -> None:
+    state = CallState(branch="shellharbour", today=date(2026, 9, 15))
+    assert state.may_confirm_booking() is False
+    assert state.may_offer_times() is False
+    block = state.prompt_block().lower()
+    assert "booking_locked: false" in block
+    assert "you're all set" in block
+    assert "not locked yet" in block
+    assert "call check_availability first" in block
+
+    failed = state.record_book_result(
+        {
+            "ok": False,
+            "confirmed": False,
+            "reason": "slot_gone",
+            "slot_id": "slot_shellharbour_2026-09-15_1430_dr-mohit-tolani",
+        }
+    )
+    assert failed["confirmed"] is False
+    assert "not locked" in failed["say"].lower()
+    assert state.may_confirm_booking() is False
+    assert state.confirmed_slot is None
+    assert "slot_gone" in state.prompt_block()
+
+    locked = state.record_book_result(
+        {
+            "ok": True,
+            "confirmed": True,
+            "slot_id": "slot_shellharbour_2026-09-16_1010_dr-mohit-tolani",
+        }
+    )
+    assert "all set" in locked["say"].lower() or "locked" in locked["say"].lower()
+    assert state.may_confirm_booking() is True
+    assert state.confirmed_slot == "slot_shellharbour_2026-09-16_1010_dr-mohit-tolani"
+    assert "booking_locked: True" in state.prompt_block()
+
+
+def test_apply_confirmation_gate_rejects_ok_without_confirmed() -> None:
+    gated = apply_confirmation_gate(
+        {"ok": True, "confirmed": False, "reason": "pending"}
+    )
+    assert gated["confirmed"] is False
+    assert gated["say"] == NOT_LOCKED_SAY
+
+
+def test_caller_naming_dentist_sets_preferred_clinician() -> None:
+    state = CallState(branch="shellharbour")
+    state.observe_user_text("Can I see Dr Mohit this week, broken tooth")
+    assert state.preferred_clinician == "Dr Mohit Tolani"
+    assert "mohit" in state.prompt_block().lower()
+    assert match_clinician("I want Dr Tolani") == "Dr Mohit Tolani"
+
+
+def test_may_offer_times_only_after_availability_slots() -> None:
+    state = CallState()
+    assert state.may_offer_times() is False
+    state.remember_availability({"ok": True, "slots": []})
+    assert state.may_offer_times() is False
+    state.remember_availability(
+        {
+            "ok": True,
+            "slots": [
+                {
+                    "date": "2026-09-16",
+                    "time": "10:10",
+                    "clinician": "Dr Mohit Tolani",
+                    "slot_id": "slot_shellharbour_2026-09-16_1010_dr-mohit-tolani",
+                }
+            ],
+        }
+    )
+    assert state.may_offer_times() is True
+    assert "10:10" in state.prompt_block()
+    assert "Dr Mohit Tolani" in state.prompt_block()

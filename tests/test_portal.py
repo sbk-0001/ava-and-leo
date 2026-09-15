@@ -24,8 +24,9 @@ def test_portal_lists_branch_facts() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["trading_name"] == "Dapto Dentists"
-    assert "Mall Lane" in body["parking"]
-    assert any("Beena Kurian" in name for name in body["dentists"])
+    assert body["parking"] == "VERIFY"
+    assert body["dentists"] == []
+    assert "35 Baan Baan Street" in body["address"]
 
 
 def test_portal_diary_and_book_reschedule_cancel() -> None:
@@ -106,13 +107,8 @@ def test_portal_ui_says_call_ava() -> None:
     assert "Leo" not in js
 
 
-def test_portal_phone_brand_is_illawarra_dentists() -> None:
-    """Desk brand is the group number; clinic facts still come from the API."""
+def test_portal_phone_brand_is_ava_desk() -> None:
+    """Portal is a staff desk, not the inbound greeting brand."""
     html = (STATIC / "index.html").read_text()
-    assert "Illawarra Dentists" in html
-    assert "Ava desk — Illawarra Dentists" in html
-    leftover = html.replace("Illawarra Dentists", "")
-    assert "Illawarra Dental" not in leftover
-    assert "Illawarra Group" not in leftover
-    assert "Illawarra group" not in leftover
-    assert "Shellharbour Dentists" not in html
+    assert "Ava desk" in html
+    assert "Call Ava" in html

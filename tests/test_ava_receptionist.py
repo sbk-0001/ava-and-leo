@@ -1,17 +1,18 @@
-"""Ava Realtime voice defaults, barge-in settings, and console-safe EndCallTool."""
+"""Ava Realtime voice defaults, barge-in, tools, and branch greeting."""
 
 import inspect
 
-from livekit.agents.beta.tools import EndCallTool
-
 from ava_receptionist import (
     AVA_DEFAULT_VOICE,
+    AVA_SPEECH_SPEED,
+    AVA_TEMPERATURE,
+    AVA_VAD_SILENCE_MS,
     AvaReceptionist,
     ava_realtime_model,
     inbound_greeting_instructions,
     resolve_ava_voice,
+    transfer_destination_for_branch,
 )
-from persona import GROUP_NAME
 
 
 def test_default_realtime_voice_is_marin() -> None:
@@ -22,60 +23,51 @@ def test_default_realtime_voice_is_marin() -> None:
     assert resolve_ava_voice(env={"LEO_REALTIME_VOICE": "cedar"}) == "cedar"
 
 
-def test_end_call_tool_ignores_on_enter() -> None:
-    source = inspect.getsource(AvaReceptionist.__init__)
-    assert "ignore_on_enter" in source
-    assert "ignore_on_enter" in inspect.signature(EndCallTool.__init__).parameters
-
-
-def test_booking_tools_still_present() -> None:
-    """Routing change must not drop book / reschedule / cancel."""
+def test_required_tools_are_present() -> None:
     source = inspect.getsource(AvaReceptionist)
-    assert "async def book_appointment" in source
-    assert "async def reschedule_appointment" in source
-    assert "async def cancel_appointment" in source
-    assert "async def get_availability" in source
-    assert "clinic the caller chose" in source
+    for name in (
+        "check_availability",
+        "book_appointment",
+        "reschedule_appointment",
+        "cancel_appointment",
+        "lookup_patient",
+        "quote_fee",
+        "take_message",
+        "transfer_to_human",
+        "end_call",
+    ):
+        assert f"async def {name}" in source, name
+    assert "TransferSIPParticipantRequest" in source
+    assert "DeleteRoomRequest" in source
+    assert "_cover" in source
+    assert "generate_reply" in source
 
 
-def test_inbound_greeting_is_ava_and_human() -> None:
-    """First line is Ava at Illawarra Dentists, then clinic choice."""
-    text = inbound_greeting_instructions("dapto")
+def test_inbound_greeting_is_the_mapped_branch() -> None:
+    """DID maps the branch. She answers as that clinic — never a group menu."""
+    text = inbound_greeting_instructions("shellharbour")
     lowered = text.lower()
     assert "ava" in lowered
-    assert "leo" not in lowered
-    assert GROUP_NAME.lower() in lowered
-    assert "ava at illawarra dentists" in lowered
-    leftover = text.replace(GROUP_NAME, "")
-    assert "Illawarra Dental" not in leftover
-    assert "Illawarra Group" not in leftover
-    assert "ava at dapto dentists" not in lowered
-    assert "ava at shellharbour dentists" not in lowered
-    assert "ava at woonona dentists" not in lowered
-    assert "shellharbour" in lowered
-    assert "dapto" in lowered
-    assert "woonona" in lowered
-    assert "warm" in lowered or "human" in lowered
-    assert "booking" in lowered or "book" in lowered or "help" in lowered
-    assert "one" in lowered and "question" in lowered
-    assert "short" in lowered
-    assert "script" in lowered or "menu" in lowered
-    assert "list" in lowered
-    assert "ssml" in lowered or "stage" in lowered
-    assert "debto" not in lowered
-    assert "winona" not in lowered
-    assert len(text) < 750
+    assert "shellharbour dentists" in lowered
+    assert "good morning, shellharbour dentists, this is ava" in lowered
+    assert "never ask which branch" in lowered
+    assert "illawarra dentists group" not in lowered
+    assert "list all three" not in lowered
+
+    dapto = inbound_greeting_instructions("dapto").lower()
+    assert "dapto dentists" in dapto
+    assert "ava at illawarra dentists" not in dapto
 
 
-def test_inbound_greeting_identity_ignores_mapped_branch() -> None:
-    """DID/portal branch is not the number the caller reached."""
-    for branch_id in ("shellharbour", "dapto", "woonona"):
-        text = inbound_greeting_instructions(branch_id)
-        lowered = text.lower()
-        assert "ava at illawarra dentists" in lowered
-        leftover = text.replace(GROUP_NAME, "")
-        assert "Illawarra Dental" not in leftover
-        assert f"ava at {branch_id} dentists" not in lowered
+def test_inbound_greeting_uses_did_branch() -> None:
+    for branch_id, name in (
+        ("shellharbour", "shellharbour dentists"),
+        ("dapto", "dapto dentists"),
+        ("woonona", "woonona dentists"),
+    ):
+        text = inbound_greeting_instructions(branch_id).lower()
+        assert name in text
+        assert "never ask which branch" in text
 
 
 def test_ava_session_uses_realtime_llm_and_interruptions() -> None:
@@ -87,20 +79,43 @@ def test_ava_session_uses_realtime_llm_and_interruptions() -> None:
     assert "True" in source
 
 
-def test_realtime_model_enables_barge_in_and_human_turns() -> None:
-    """OpenAI Realtime turn detection should feel human and still allow barge-in.
+def test_realtime_model_server_vad_barge_in() -> None:
+    """Server VAD 450-550ms, barge-in on, speech ~0.9, temperature 0.9-1.0.
 
-    Semantic VAD is the documented default: less likely to cut the caller off
-    mid-sentence. interrupt_response stays on so they can barge in.
     Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/#turn-detection
-          https://docs.livekit.io/agents/logic/turns/#interruption-in-realtime-mode
     """
     source = inspect.getsource(ava_realtime_model)
     assert "interrupt_response" in source
     assert "True" in source
-    assert "semantic_vad" in source
-    assert "eagerness" in source
-    assert "medium" in source
+    assert "server_vad" in source
+    assert "silence_duration_ms" in source
+    assert "AVA_VAD_SILENCE_MS" in source
+    assert 450 <= AVA_VAD_SILENCE_MS <= 550
+    assert AVA_SPEECH_SPEED == 0.9
+    assert 0.9 <= AVA_TEMPERATURE <= 1.0
     assert "create_response" in source
-    assert "ssml" not in source.lower()
-    assert "temperature" in source
+
+
+def test_transfer_destination_prefers_branch_env() -> None:
+    dest = transfer_destination_for_branch(
+        "dapto",
+        env={
+            "SIP_TRANSFER_DAPTO": "+61242880737",
+            "SIP_TRANSFER_TO": "+61242169911",
+        },
+    )
+    assert dest == "+61242880737"
+    fallback = transfer_destination_for_branch(
+        "woonona", env={"SIP_TRANSFER_TO": "+61242169911"}
+    )
+    assert fallback == "+61242169911"
+
+
+def test_agent_builds_call_state_before_speech() -> None:
+    from agent import my_agent
+
+    source = inspect.getsource(my_agent)
+    assert "CallState(branch=branch_id" in source
+    assert "call_state ready before speech" in source
+    assert "kill_switch" in source
+    assert "inbound_greeting_instructions(call_state.branch)" in source

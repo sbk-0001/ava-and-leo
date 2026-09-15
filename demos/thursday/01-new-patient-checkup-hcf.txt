@@ -1,0 +1,21 @@
+call_id: 01-new-patient-checkup-hcf
+room: demo-01-new-patient-checkup-hcf
+branch: shellharbour
+started_at: 2026-09-15T02:03:23.003997+00:00
+ended_at: 2026-09-15T02:03:23.004303+00:00
+
+[2026-09-15T02:03:23.004013+00:00] assistant: Good morning, Shellharbour Dentists, this is Ava!
+[2026-09-15T02:03:23.004038+00:00] user: Hi, I've never been, I need a check-up and clean. I'm with HCF.
+[2026-09-15T02:03:23.004042+00:00] assistant: Lovely, welcome in. Let me just have a look for ya... doo doo doo...
+[2026-09-15T02:03:23.004114+00:00] TOOL quote_fee: {'ok': True, 'status': 'known', 'item': 'check_up', 'label': 'New patient check-up and clean', 'speak': 'New patient check-up and clean: gap free for health fund holders, or capped at $250 if no cover. Normally valued at $350. Includes comprehensive exam, scale and clean, up to two digital x-rays, fluoride, and a printed treatment plan. Not combinable with other offers.'}
+[2026-09-15T02:03:23.004126+00:00] TOOL quote_fee: {'ok': True, 'status': 'known', 'item': 'health_funds', 'label': 'Health funds and HICAPS', 'speak': 'Preferred provider for HCF, CBHS and Smile.com.au. HICAPS on the spot for all funds.'}
+[2026-09-15T02:03:23.004132+00:00] assistant: Yep, so for new patients it's our special — check-up, clean, couple of x-rays and fluoride, and you walk out with a printed plan. If you've got health cover it's gap free, and if you don't it's capped at two fifty. Normally three fifty. We're a preferred provider for HCF, so HICAPS on the spot. You with a fund? Oh — HCF, too easy. What's a good mobile for ya?
+[2026-09-15T02:03:23.004144+00:00] user: 0412 334 556, Sam Nguyen.
+[2026-09-15T02:03:23.004156+00:00] TOOL lookup_patient: {'ok': True, 'mobile': '0412334556', 'stored': True}
+[2026-09-15T02:03:23.004238+00:00] TOOL check_availability: {'ok': True, 'branch_id': 'shellharbour', 'appointment_type': 'check-up', 'date_from': '2026-09-15', 'date_to': '2026-09-21', 'slots': [{'slot_id': 'slot_shellharbour_2026-09-15_0800_dr-mohit-tolani', 'date': '2026-09-15', 'time': '08:00', 'clinician': 'Dr Mohit Tolani', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_0830_dr-pat-pandey', 'date': '2026-09-15', 'time': '08:30', 'clinician': 'Dr Pat Pandey', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_0900_dr-maryam-kalo', 'date': '2026-09-15', 'time': '09:00', 'clinician': 'Dr Maryam Kalo', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_0930_dr-rick-wasef', 'date': '2026-09-15', 'time': '09:30', 'clinician': 'Dr Rick Wasef', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_1000_dr-mohit-tolani', 'date': '2026-09-15', 'time': '10:00', 'clinician': 'Dr Mohit Tolani', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_1030_dr-pat-pandey', 'date': '2026-09-15', 'time': '10:30', 'clinician': 'Dr Pat Pandey', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_1100_dr-maryam-kalo', 'date': '2026-09-15', 'time': '11:00', 'clinician': 'Dr Maryam Kalo', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_1130_dr-rick-wasef', 'date': '2026-09-15', 'time': '11:30', 'cli
+[2026-09-15T02:03:23.004242+00:00] assistant: I've got 2026-09-15 at 08:00 with Dr Mohit Tolani, or I can look at the next one if that doesn't work. Which suits ya better?
+[2026-09-15T02:03:23.004250+00:00] user: The first one is perfect.
+[2026-09-15T02:03:23.004285+00:00] TOOL book_appointment: {'ok': True, 'confirmed': True, 'booking_id': 'bkg_ed9bccb38e', 'patient_id': 'pat_00d8cc779b', 'date': '2026-09-15', 'time': '08:00', 'clinician': 'Dr Mohit Tolani', 'branch_id': 'shellharbour'}
+[2026-09-15T02:03:23.004289+00:00] assistant: Beautiful, you're all booked in — 2026-09-15, 08:00, with Dr Mohit Tolani. You'll get a text reminder the day before. Anything else I can do for ya?
+[2026-09-15T02:03:23.004298+00:00] user: That's it, thanks.
+[2026-09-15T02:03:23.004300+00:00] assistant: No worries at all. Take care, see ya then!

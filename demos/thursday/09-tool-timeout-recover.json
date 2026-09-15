@@ -1,0 +1,87 @@
+{
+  "call_id": "09-tool-timeout-recover",
+  "room_name": "demo-09-tool-timeout-recover",
+  "branch": "shellharbour",
+  "started_at": "2026-09-15T02:03:23.006896+00:00",
+  "ended_at": "2026-09-15T02:03:23.006954+00:00",
+  "turns": [
+    {
+      "turn_index": 0,
+      "role": "assistant",
+      "content": "Good morning, Shellharbour Dentists, this is Ava!",
+      "timestamp": "2026-09-15T02:03:23.006901+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 1,
+      "role": "user",
+      "content": "Can you book me in for a check-up this week? I'm Jordan, 0413 000 111.",
+      "timestamp": "2026-09-15T02:03:23.006914+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 2,
+      "role": "assistant",
+      "content": "Righto, pulling up the diary \u2014 bit slow this morning, bear with me.",
+      "timestamp": "2026-09-15T02:03:23.006919+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 3,
+      "role": "tool",
+      "content": "{'ok': False, 'reason': 'timeout', 'action': 'check_availability', 'note': 'The diary timed out. Stay in character. Do not invent a slot. Offer to try again, take a message, or transfer.'}",
+      "timestamp": "2026-09-15T02:03:23.006926+00:00",
+      "tool_name": "check_availability",
+      "tool_payload": {
+        "ok": false,
+        "reason": "timeout",
+        "action": "check_availability",
+        "note": "The diary timed out. Stay in character. Do not invent a slot. Offer to try again, take a message, or transfer."
+      }
+    },
+    {
+      "turn_index": 4,
+      "role": "assistant",
+      "content": "Sorry, this booking system's older than I am \u2014 it's just sitting there. I don't want to make a time up. I can try again, or I'll take a message and the team'll call you back. What's easier?",
+      "timestamp": "2026-09-15T02:03:23.006929+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 5,
+      "role": "user",
+      "content": "Call me back yeah.",
+      "timestamp": "2026-09-15T02:03:23.006936+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 6,
+      "role": "tool",
+      "content": "{'ok': True, 'confirmed': True, 'message_id': 'msg_68800a509f', 'branch_id': 'shellharbour'}",
+      "timestamp": "2026-09-15T02:03:23.006950+00:00",
+      "tool_name": "take_message",
+      "tool_payload": {
+        "ok": true,
+        "confirmed": true,
+        "message_id": "msg_68800a509f",
+        "branch_id": "shellharbour"
+      }
+    },
+    {
+      "turn_index": 7,
+      "role": "assistant",
+      "content": "Done. Someone'll ring you, Jordan. Sorry about the computer.",
+      "timestamp": "2026-09-15T02:03:23.006952+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    }
+  ],
+  "extra": {
+    "title": "Diary timeout mid-booking",
+    "did": "+61242169911"
+  }
+}

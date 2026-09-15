@@ -1,0 +1,93 @@
+{
+  "call_id": "08-barge-in-three-times",
+  "room_name": "demo-08-barge-in-three-times",
+  "branch": "shellharbour",
+  "started_at": "2026-09-15T02:03:23.006632+00:00",
+  "ended_at": "2026-09-15T02:03:23.006681+00:00",
+  "turns": [
+    {
+      "turn_index": 0,
+      "role": "assistant",
+      "content": "Good morning, Shellharbour Dentists, this is Ava!",
+      "timestamp": "2026-09-15T02:03:23.006637+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 1,
+      "role": "assistant",
+      "content": "So what I can do is pull up the diar\u2014",
+      "timestamp": "2026-09-15T02:03:23.006642+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 2,
+      "role": "user",
+      "content": "Hang on \u2014 is parking easy there?",
+      "timestamp": "2026-09-15T02:03:23.006655+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 3,
+      "role": "assistant",
+      "content": "Sorry, go on. Yep, carpark right out the front off Captain Cook Drive.",
+      "timestamp": "2026-09-15T02:03:23.006657+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 4,
+      "role": "assistant",
+      "content": "And for the check-up it's the new patient spec\u2014",
+      "timestamp": "2026-09-15T02:03:23.006659+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 5,
+      "role": "user",
+      "content": "Does that include x-rays?",
+      "timestamp": "2026-09-15T02:03:23.006667+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 6,
+      "role": "assistant",
+      "content": "Yep, yep \u2014 up to two digital x-rays, fluoride, printed plan.",
+      "timestamp": "2026-09-15T02:03:23.006669+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 7,
+      "role": "assistant",
+      "content": "If I book you Thursd\u2014",
+      "timestamp": "2026-09-15T02:03:23.006670+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 8,
+      "role": "user",
+      "content": "Make it Friday.",
+      "timestamp": "2026-09-15T02:03:23.006677+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 9,
+      "role": "assistant",
+      "content": "Friday, too easy. Let me just have a look...",
+      "timestamp": "2026-09-15T02:03:23.006679+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    }
+  ],
+  "extra": {
+    "title": "Barge-in three times mid-sentence",
+    "did": "+61242169911"
+  }
+}

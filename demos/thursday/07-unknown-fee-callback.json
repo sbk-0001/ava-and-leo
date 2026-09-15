@@ -1,0 +1,80 @@
+{
+  "call_id": "07-unknown-fee-callback",
+  "room_name": "demo-07-unknown-fee-callback",
+  "branch": "shellharbour",
+  "started_at": "2026-09-15T02:03:23.006263+00:00",
+  "ended_at": "2026-09-15T02:03:23.006421+00:00",
+  "turns": [
+    {
+      "turn_index": 0,
+      "role": "assistant",
+      "content": "Good morning, Shellharbour Dentists, this is Ava!",
+      "timestamp": "2026-09-15T02:03:23.006268+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 1,
+      "role": "user",
+      "content": "How much is a white filling on a back tooth?",
+      "timestamp": "2026-09-15T02:03:23.006279+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 2,
+      "role": "tool",
+      "content": "{'ok': False, 'status': 'unknown', 'reason': 'unknown_item', 'item': 'white filling', 'note': 'No fee in the table. Do not invent a price. Offer to take a message or have the team call back.'}",
+      "timestamp": "2026-09-15T02:03:23.006385+00:00",
+      "tool_name": "quote_fee",
+      "tool_payload": {
+        "ok": false,
+        "status": "unknown",
+        "reason": "unknown_item",
+        "item": "white filling",
+        "note": "No fee in the table. Do not invent a price. Offer to take a message or have the team call back."
+      }
+    },
+    {
+      "turn_index": 3,
+      "role": "assistant",
+      "content": "I couldn't tell ya a number off the top of my head and I don't want to guess. Want me to get the team to call you back with the exact figure?",
+      "timestamp": "2026-09-15T02:03:23.006390+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 4,
+      "role": "user",
+      "content": "Yeah please, I'm Alex, 0412 111 222.",
+      "timestamp": "2026-09-15T02:03:23.006399+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 5,
+      "role": "tool",
+      "content": "{'ok': True, 'confirmed': True, 'message_id': 'msg_f8c57c88d0', 'branch_id': 'shellharbour'}",
+      "timestamp": "2026-09-15T02:03:23.006416+00:00",
+      "tool_name": "take_message",
+      "tool_payload": {
+        "ok": true,
+        "confirmed": true,
+        "message_id": "msg_f8c57c88d0",
+        "branch_id": "shellharbour"
+      }
+    },
+    {
+      "turn_index": 6,
+      "role": "assistant",
+      "content": "Lovely, I'll have someone ring you, Alex. Should be today.",
+      "timestamp": "2026-09-15T02:03:23.006418+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    }
+  ],
+  "extra": {
+    "title": "Price not in the fee table",
+    "did": "+61242169911"
+  }
+}

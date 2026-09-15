@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agent-starter-python"
 version = "1.0.0"
-description = "Ava LiveKit voice agent — Illawarra Dentists phone receptionist"
+description = "Ava LiveKit voice agent — Shellharbour / Dapto / Woonona phone receptionist"
 requires-python = ">=3.10, <3.15"
 
 dependencies = [
@@ -54,7 +54,7 @@ select = ["E", "F", "W", "I", "N", "B", "A", "C4", "UP", "SIM", "RUF"]
 ignore = ["E501"]  # Line too long (handled by formatter)
 
 [tool.ruff.lint.isort]
-known-first-party = ["agent", "ava_receptionist", "make_call", "persona", "portal", "practice", "run_local", "sip_utils"]
+known-first-party = ["agent", "ava_receptionist", "booking", "call_log", "call_state", "demo_harness", "make_call", "persona", "portal", "practice", "run_local", "sip_utils"]
 
 [tool.ruff.format]
 quote-style = "double"

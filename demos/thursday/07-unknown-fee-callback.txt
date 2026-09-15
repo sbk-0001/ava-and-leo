@@ -1,0 +1,13 @@
+call_id: 07-unknown-fee-callback
+room: demo-07-unknown-fee-callback
+branch: shellharbour
+started_at: 2026-09-15T02:03:23.006263+00:00
+ended_at: 2026-09-15T02:03:23.006421+00:00
+
+[2026-09-15T02:03:23.006268+00:00] assistant: Good morning, Shellharbour Dentists, this is Ava!
+[2026-09-15T02:03:23.006279+00:00] user: How much is a white filling on a back tooth?
+[2026-09-15T02:03:23.006385+00:00] TOOL quote_fee: {'ok': False, 'status': 'unknown', 'reason': 'unknown_item', 'item': 'white filling', 'note': 'No fee in the table. Do not invent a price. Offer to take a message or have the team call back.'}
+[2026-09-15T02:03:23.006390+00:00] assistant: I couldn't tell ya a number off the top of my head and I don't want to guess. Want me to get the team to call you back with the exact figure?
+[2026-09-15T02:03:23.006399+00:00] user: Yeah please, I'm Alex, 0412 111 222.
+[2026-09-15T02:03:23.006416+00:00] TOOL take_message: {'ok': True, 'confirmed': True, 'message_id': 'msg_f8c57c88d0', 'branch_id': 'shellharbour'}
+[2026-09-15T02:03:23.006418+00:00] assistant: Lovely, I'll have someone ring you, Alex. Should be today.

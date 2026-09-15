@@ -103,7 +103,7 @@ async def test_mock_book_reschedule_cancel_confirmed() -> None:
         branch_id="shellharbour",
         date="2026-09-21",
         time="14:00",
-        clinician="Dr Amy Min",
+        clinician="Dr Rick Wasef",
     )
     booked = await client.book_appointment(
         branch_id="shellharbour",
@@ -127,7 +127,7 @@ async def test_mock_book_reschedule_cancel_confirmed() -> None:
     assert moved["ok"] is True
     assert moved["confirmed"] is True
     assert moved["time"] == "14:00"
-    assert moved["clinician"] == "Dr Amy Min"
+    assert moved["clinician"] == "Dr Rick Wasef"
 
     after_move = await client.get_availability(
         branch_id="shellharbour", date="2026-09-21"
@@ -203,22 +203,30 @@ def test_seeded_diary_uses_real_dentists_and_branch_hours() -> None:
         if dentist != VERIFY:
             assert dentist in sh_names
 
-    saturday = (today + timedelta(days=5)).isoformat()
-    dapto_sat = [
+    dapto_slots = [
         slot
         for slot in client.slots.values()
-        if slot.branch_id == "dapto" and slot.date == saturday
+        if slot.branch_id == "dapto" and slot.date == monday
     ]
-    assert dapto_sat
-    assert all(slot.time >= "08:00" and slot.time < "16:00" for slot in dapto_sat)
+    assert dapto_slots
+    assert all(slot.clinician == "available dentist" for slot in dapto_slots)
 
-    woonona_sat = [
+    woonona_slots = [
         slot
         for slot in client.slots.values()
-        if slot.branch_id == "woonona" and slot.date == saturday
+        if slot.branch_id == "woonona" and slot.date == monday
     ]
-    assert woonona_sat
-    assert all(slot.time >= "08:00" and slot.time < "17:00" for slot in woonona_sat)
+    assert woonona_slots
+    assert all(slot.clinician == "available dentist" for slot in woonona_slots)
+
+    saturday = (today + timedelta(days=5)).isoformat()
+    sh_sat = [
+        slot
+        for slot in client.slots.values()
+        if slot.branch_id == "shellharbour" and slot.date == saturday
+    ]
+    assert sh_sat
+    assert all(slot.time >= "09:00" and slot.time < "11:00" for slot in sh_sat)
 
 
 def test_mock_diary_persists_to_json(tmp_path: Path) -> None:

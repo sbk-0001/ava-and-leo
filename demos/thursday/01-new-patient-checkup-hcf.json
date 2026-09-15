@@ -1,0 +1,262 @@
+{
+  "call_id": "01-new-patient-checkup-hcf",
+  "room_name": "demo-01-new-patient-checkup-hcf",
+  "branch": "shellharbour",
+  "started_at": "2026-09-15T02:03:23.003997+00:00",
+  "ended_at": "2026-09-15T02:03:23.004303+00:00",
+  "turns": [
+    {
+      "turn_index": 0,
+      "role": "assistant",
+      "content": "Good morning, Shellharbour Dentists, this is Ava!",
+      "timestamp": "2026-09-15T02:03:23.004013+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 1,
+      "role": "user",
+      "content": "Hi, I've never been, I need a check-up and clean. I'm with HCF.",
+      "timestamp": "2026-09-15T02:03:23.004038+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 2,
+      "role": "assistant",
+      "content": "Lovely, welcome in. Let me just have a look for ya... doo doo doo...",
+      "timestamp": "2026-09-15T02:03:23.004042+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 3,
+      "role": "tool",
+      "content": "{'ok': True, 'status': 'known', 'item': 'check_up', 'label': 'New patient check-up and clean', 'speak': 'New patient check-up and clean: gap free for health fund holders, or capped at $250 if no cover. Normally valued at $350. Includes comprehensive exam, scale and clean, up to two digital x-rays, fluoride, and a printed treatment plan. Not combinable with other offers.'}",
+      "timestamp": "2026-09-15T02:03:23.004114+00:00",
+      "tool_name": "quote_fee",
+      "tool_payload": {
+        "ok": true,
+        "status": "known",
+        "item": "check_up",
+        "label": "New patient check-up and clean",
+        "speak": "New patient check-up and clean: gap free for health fund holders, or capped at $250 if no cover. Normally valued at $350. Includes comprehensive exam, scale and clean, up to two digital x-rays, fluoride, and a printed treatment plan. Not combinable with other offers."
+      }
+    },
+    {
+      "turn_index": 4,
+      "role": "tool",
+      "content": "{'ok': True, 'status': 'known', 'item': 'health_funds', 'label': 'Health funds and HICAPS', 'speak': 'Preferred provider for HCF, CBHS and Smile.com.au. HICAPS on the spot for all funds.'}",
+      "timestamp": "2026-09-15T02:03:23.004126+00:00",
+      "tool_name": "quote_fee",
+      "tool_payload": {
+        "ok": true,
+        "status": "known",
+        "item": "health_funds",
+        "label": "Health funds and HICAPS",
+        "speak": "Preferred provider for HCF, CBHS and Smile.com.au. HICAPS on the spot for all funds."
+      }
+    },
+    {
+      "turn_index": 5,
+      "role": "assistant",
+      "content": "Yep, so for new patients it's our special \u2014 check-up, clean, couple of x-rays and fluoride, and you walk out with a printed plan. If you've got health cover it's gap free, and if you don't it's capped at two fifty. Normally three fifty. We're a preferred provider for HCF, so HICAPS on the spot. You with a fund? Oh \u2014 HCF, too easy. What's a good mobile for ya?",
+      "timestamp": "2026-09-15T02:03:23.004132+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 6,
+      "role": "user",
+      "content": "0412 334 556, Sam Nguyen.",
+      "timestamp": "2026-09-15T02:03:23.004144+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 7,
+      "role": "tool",
+      "content": "{'ok': True, 'mobile': '0412334556', 'stored': True}",
+      "timestamp": "2026-09-15T02:03:23.004156+00:00",
+      "tool_name": "lookup_patient",
+      "tool_payload": {
+        "ok": true,
+        "mobile": "0412334556",
+        "stored": true
+      }
+    },
+    {
+      "turn_index": 8,
+      "role": "tool",
+      "content": "{'ok': True, 'branch_id': 'shellharbour', 'appointment_type': 'check-up', 'date_from': '2026-09-15', 'date_to': '2026-09-21', 'slots': [{'slot_id': 'slot_shellharbour_2026-09-15_0800_dr-mohit-tolani', 'date': '2026-09-15', 'time': '08:00', 'clinician': 'Dr Mohit Tolani', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_0830_dr-pat-pandey', 'date': '2026-09-15', 'time': '08:30', 'clinician': 'Dr Pat Pandey', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_0900_dr-maryam-kalo', 'date': '2026-09-15', 'time': '09:00', 'clinician': 'Dr Maryam Kalo', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_0930_dr-rick-wasef', 'date': '2026-09-15', 'time': '09:30', 'clinician': 'Dr Rick Wasef', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_1000_dr-mohit-tolani', 'date': '2026-09-15', 'time': '10:00', 'clinician': 'Dr Mohit Tolani', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_1030_dr-pat-pandey', 'date': '2026-09-15', 'time': '10:30', 'clinician': 'Dr Pat Pandey', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_1100_dr-maryam-kalo', 'date': '2026-09-15', 'time': '11:00', 'clinician': 'Dr Maryam Kalo', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_1130_dr-rick-wasef', 'date': '2026-09-15', 'time': '11:30', 'cli",
+      "timestamp": "2026-09-15T02:03:23.004238+00:00",
+      "tool_name": "check_availability",
+      "tool_payload": {
+        "ok": true,
+        "branch_id": "shellharbour",
+        "appointment_type": "check-up",
+        "date_from": "2026-09-15",
+        "date_to": "2026-09-21",
+        "slots": [
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_0800_dr-mohit-tolani",
+            "date": "2026-09-15",
+            "time": "08:00",
+            "clinician": "Dr Mohit Tolani",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_0830_dr-pat-pandey",
+            "date": "2026-09-15",
+            "time": "08:30",
+            "clinician": "Dr Pat Pandey",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_0900_dr-maryam-kalo",
+            "date": "2026-09-15",
+            "time": "09:00",
+            "clinician": "Dr Maryam Kalo",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_0930_dr-rick-wasef",
+            "date": "2026-09-15",
+            "time": "09:30",
+            "clinician": "Dr Rick Wasef",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1000_dr-mohit-tolani",
+            "date": "2026-09-15",
+            "time": "10:00",
+            "clinician": "Dr Mohit Tolani",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1030_dr-pat-pandey",
+            "date": "2026-09-15",
+            "time": "10:30",
+            "clinician": "Dr Pat Pandey",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1100_dr-maryam-kalo",
+            "date": "2026-09-15",
+            "time": "11:00",
+            "clinician": "Dr Maryam Kalo",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1130_dr-rick-wasef",
+            "date": "2026-09-15",
+            "time": "11:30",
+            "clinician": "Dr Rick Wasef",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1200_dr-mohit-tolani",
+            "date": "2026-09-15",
+            "time": "12:00",
+            "clinician": "Dr Mohit Tolani",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1230_dr-pat-pandey",
+            "date": "2026-09-15",
+            "time": "12:30",
+            "clinician": "Dr Pat Pandey",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1300_dr-maryam-kalo",
+            "date": "2026-09-15",
+            "time": "13:00",
+            "clinician": "Dr Maryam Kalo",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1330_dr-rick-wasef",
+            "date": "2026-09-15",
+            "time": "13:30",
+            "clinician": "Dr Rick Wasef",
+            "branch_id": "shellharbour",
+            "taken": false
+          }
+        ]
+      }
+    },
+    {
+      "turn_index": 9,
+      "role": "assistant",
+      "content": "I've got 2026-09-15 at 08:00 with Dr Mohit Tolani, or I can look at the next one if that doesn't work. Which suits ya better?",
+      "timestamp": "2026-09-15T02:03:23.004242+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 10,
+      "role": "user",
+      "content": "The first one is perfect.",
+      "timestamp": "2026-09-15T02:03:23.004250+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 11,
+      "role": "tool",
+      "content": "{'ok': True, 'confirmed': True, 'booking_id': 'bkg_ed9bccb38e', 'patient_id': 'pat_00d8cc779b', 'date': '2026-09-15', 'time': '08:00', 'clinician': 'Dr Mohit Tolani', 'branch_id': 'shellharbour'}",
+      "timestamp": "2026-09-15T02:03:23.004285+00:00",
+      "tool_name": "book_appointment",
+      "tool_payload": {
+        "ok": true,
+        "confirmed": true,
+        "booking_id": "bkg_ed9bccb38e",
+        "patient_id": "pat_00d8cc779b",
+        "date": "2026-09-15",
+        "time": "08:00",
+        "clinician": "Dr Mohit Tolani",
+        "branch_id": "shellharbour"
+      }
+    },
+    {
+      "turn_index": 12,
+      "role": "assistant",
+      "content": "Beautiful, you're all booked in \u2014 2026-09-15, 08:00, with Dr Mohit Tolani. You'll get a text reminder the day before. Anything else I can do for ya?",
+      "timestamp": "2026-09-15T02:03:23.004289+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 13,
+      "role": "user",
+      "content": "That's it, thanks.",
+      "timestamp": "2026-09-15T02:03:23.004298+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 14,
+      "role": "assistant",
+      "content": "No worries at all. Take care, see ya then!",
+      "timestamp": "2026-09-15T02:03:23.004300+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    }
+  ],
+  "extra": {
+    "title": "New patient check-up special + HCF",
+    "did": "+61242169911"
+  }
+}

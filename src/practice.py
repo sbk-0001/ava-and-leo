@@ -503,9 +503,11 @@ def seed_mock_diary(
             continue
         for branch in BRANCHES.values():
             hours = branch.clinic_hours
-            dentists = [name for name in branch.dentists if name != VERIFY]
+            dentists = [name for name in branch.dentists if name and name != VERIFY]
             if not dentists:
-                continue
+                # Brief did not name dentists for this site — still seed diary
+                # slots so Ava can offer times without inventing clinician names.
+                dentists = ["available dentist"]
             if weekday == 5:
                 if not hours.saturday_open or not hours.saturday_close:
                     continue

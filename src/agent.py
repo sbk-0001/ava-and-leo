@@ -24,8 +24,10 @@ from livekit.agents.llm import ChatMessage
 from livekit.plugins import assemblyai, cartesia, groq
 
 from ava_receptionist import AvaReceptionist, inbound_greeting_instructions
-from persona import CANONICAL_PERSONAS, canonical_persona, resolve_persona
-from practice import get_shared_practice
+from booking import get_shared_booking_provider
+from call_log import CallLog, iso, log_dir_from_env, supabase_turn_row
+from call_state import CallState, kill_switch_enabled
+from persona import CANONICAL_PERSONAS, canonical_persona, get_branch, resolve_persona
 from sip_utils import (
     SIP_CALL_ERRORS,
     branch_from_participant,
@@ -180,18 +182,50 @@ class Assistant(Agent):
     #     return "sunny with a temperature of 70 degrees."
 
 
+def _collect_session_turns(session: AgentSession, call_log: CallLog | None) -> CallLog:
+    """Merge session history into the call log. Every turn gets a timestamp."""
+    log = call_log or CallLog(
+        call_id="unknown",
+        room_name="",
+        branch="",
+        started_at=iso(),
+    )
+    existing = {(turn.role, turn.content) for turn in log.turns}
+    for item in session.history.items:
+        if getattr(item, "type", None) != "message":
+            continue
+        role = getattr(item, "role", None)
+        if role not in ("user", "assistant"):
+            continue
+        text = (item.text_content or "").strip()
+        if not text or (role, text) in existing:
+            continue
+        created = getattr(item, "created_at", None)
+        stamp = iso(created) if isinstance(created, datetime) else iso()
+        log.add_turn(role=role, content=text, timestamp=stamp)
+        existing.add((role, text))
+    if not log.ended_at:
+        log.close()
+    for turn in log.turns:
+        if not turn.timestamp:
+            turn.timestamp = iso()
+    return log
+
+
 def _save_call_to_supabase(
     session: AgentSession,
     ctx: JobContext,
     agent_name: str,
     started_at: datetime,
+    call_log: CallLog | None = None,
 ) -> None:
-    """Persist the finished conversation to Supabase.
+    """Persist the finished conversation. Timestamps are never NULL."""
+    log = _collect_session_turns(session, call_log)
+    try:
+        log.save(log_dir_from_env())
+    except Exception as exc:
+        print(f"[call_log] failed to save local transcript: {exc}")
 
-    Runs as a shutdown callback once the session ends, so `session.history`
-    is finalized. All work is wrapped so a logging failure can never crash
-    the call — at worst we print the error and move on.
-    """
     try:
         from supabase import create_client
 
@@ -199,27 +233,11 @@ def _save_call_to_supabase(
         supabase_key = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
         supabase = create_client(supabase_url, supabase_key)
 
-        # Build readable turns from the conversation history. Each "message"
-        # item carries a role (user/assistant/system) and its text content.
         speaker_label = "Ava" if agent_name == "ava" else agent_name.capitalize()
-        turns: list[tuple[str, str]] = []
-        for item in session.history.items:
-            if getattr(item, "type", None) != "message":
-                continue
-            role = getattr(item, "role", None)
-            if role not in ("user", "assistant"):
-                continue
-            text = (item.text_content or "").strip()
-            if not text:
-                continue
-            turns.append((role, text))
-
-        # "User: ...\nAva: ..." style transcript.
-        full_transcript = "\n".join(
-            f"{'User' if role == 'user' else speaker_label}: {text}"
-            for role, text in turns
+        full_transcript = log.transcript_text() or "\n".join(
+            f"{'User' if t.role == 'user' else speaker_label}: {t.content}"
+            for t in log.turns
         )
-
         ended_at = datetime.now(timezone.utc)
         duration_seconds = int((ended_at - started_at).total_seconds())
 
@@ -228,7 +246,6 @@ def _save_call_to_supabase(
             participant_identity.identity if participant_identity else None
         )
 
-        # One row per call.
         call_row = (
             supabase.table("ava_calls")
             .insert(
@@ -242,21 +259,15 @@ def _save_call_to_supabase(
                     "duration_seconds": duration_seconds,
                     "full_transcript": full_transcript,
                     "status": "completed",
+                    "branch": log.branch,
                 }
             )
             .execute()
         )
         call_id = call_row.data[0]["id"]
 
-        # One row per conversation turn (assistant -> "agent" for the role check).
         turn_rows = [
-            {
-                "call_id": call_id,
-                "turn_index": index,
-                "role": "user" if role == "user" else "agent",
-                "content": text,
-            }
-            for index, (role, text) in enumerate(turns)
+            supabase_turn_row(call_id=call_id, turn=turn) for turn in log.turns
         ]
         if turn_rows:
             supabase.table("ava_transcript_turns").insert(turn_rows).execute()
@@ -489,17 +500,33 @@ async def my_agent(ctx: JobContext):
         if isinstance(metadata_branch, str) and metadata_branch.strip()
         else branch_from_participant(participant)
     )
+    branch_id = get_branch(branch_id).id
+    kill_switch = kill_switch_enabled()
+    call_state = CallState(branch=branch_id, kill_switch=kill_switch)
+    logger.info(
+        "call_state ready before speech branch=%s name=%s kill_switch=%s",
+        call_state.branch,
+        call_state.branch_name,
+        kill_switch,
+    )
 
     started_at = datetime.now(timezone.utc)
+    call_log = CallLog(
+        call_id=str(ctx.job.id),
+        room_name=ctx.room.name or "",
+        branch=call_state.branch,
+        started_at=iso(started_at),
+    )
 
     if persona_key == "ava":
         _require_env(AVA_ENV_VARS)
-        practice = get_shared_practice(is_telephony=is_telephony)
+        booking = get_shared_booking_provider(is_telephony=is_telephony)
         transfer_to = os.getenv("SIP_TRANSFER_TO", "").strip() or None
         agent: Agent = AvaReceptionist(
-            branch_id=branch_id,
-            practice=practice,
+            state=call_state,
+            booking=booking,
             transfer_to=transfer_to,
+            call_log=call_log,
         )
         # OpenAI Realtime is speech-to-speech; no AssemblyAI/Groq/Cartesia pipeline.
         # Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/
@@ -511,8 +538,20 @@ async def my_agent(ctx: JobContext):
 
     _register_latency_logging(session)
 
+    @session.on("conversation_item_added")
+    def _on_transcript(ev: ConversationItemAddedEvent) -> None:
+        item = ev.item
+        if not isinstance(item, ChatMessage):
+            return
+        text = (item.text_content or "").strip()
+        if not text:
+            return
+        created = getattr(item, "created_at", None)
+        stamp = iso(created) if isinstance(created, datetime) else iso()
+        call_log.add_turn(role=item.role, content=text, timestamp=stamp)
+
     async def on_shutdown() -> None:
-        _save_call_to_supabase(session, ctx, agent_name, started_at)
+        _save_call_to_supabase(session, ctx, agent_name, started_at, call_log)
 
     ctx.add_shutdown_callback(on_shutdown)
 
@@ -525,9 +564,9 @@ async def my_agent(ctx: JobContext):
     )
 
     outbound = bool(phone_number) or metadata.get("direction") == "outbound"
-    if persona_key == "ava" and not outbound:
+    if persona_key == "ava" and not outbound and not kill_switch:
         await session.generate_reply(
-            instructions=inbound_greeting_instructions(branch_id)
+            instructions=inbound_greeting_instructions(call_state.branch)
         )
 
 

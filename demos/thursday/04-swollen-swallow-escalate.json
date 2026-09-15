@@ -1,0 +1,60 @@
+{
+  "call_id": "04-swollen-swallow-escalate",
+  "room_name": "demo-04-swollen-swallow-escalate",
+  "branch": "shellharbour",
+  "started_at": "2026-09-15T02:03:23.005536+00:00",
+  "ended_at": "2026-09-15T02:03:23.005585+00:00",
+  "turns": [
+    {
+      "turn_index": 0,
+      "role": "assistant",
+      "content": "Good morning, Shellharbour Dentists, this is Ava!",
+      "timestamp": "2026-09-15T02:03:23.005542+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 1,
+      "role": "user",
+      "content": "My face is swollen and I'm having trouble swallowing.",
+      "timestamp": "2026-09-15T02:03:23.005552+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 2,
+      "role": "assistant",
+      "content": "Stay with me. This is one for hospital, not the diary. Hang up and call triple zero, or go straight to Shellharbour or Wollongong Hospital emergency now. Don't wait for an appointment.",
+      "timestamp": "2026-09-15T02:03:23.005555+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 3,
+      "role": "tool",
+      "content": "{'ok': False, 'reason': 'do_not_book', 'action': 'call_000'}",
+      "timestamp": "2026-09-15T02:03:23.005580+00:00",
+      "tool_name": "check_availability",
+      "tool_payload": {
+        "ok": false,
+        "reason": "do_not_book",
+        "action": "call_000"
+      }
+    },
+    {
+      "turn_index": 4,
+      "role": "tool",
+      "content": "{'ok': True, 'reason': 'airway_risk'}",
+      "timestamp": "2026-09-15T02:03:23.005583+00:00",
+      "tool_name": "transfer_to_human",
+      "tool_payload": {
+        "ok": true,
+        "reason": "airway_risk"
+      }
+    }
+  ],
+  "extra": {
+    "title": "Swollen face and trouble swallowing",
+    "did": "+61242169911"
+  }
+}

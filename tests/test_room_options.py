@@ -82,3 +82,20 @@ def test_krisp_selector_treats_magicmock_as_web_not_sip() -> None:
     chosen = filt(SimpleNamespace(participant=MagicMock()))
     assert chosen.options["modelPath"] == noise_cancellation.BVC().options["modelPath"]
     assert is_sip_participant(MagicMock()) is False
+
+
+def test_nc_on_with_one_uses_krisp() -> None:
+    filt = resolve_noise_cancellation(env={"AVA_NOISE_CANCELLATION": "1"})
+    assert filt is not None
+    assert callable(filt)
+
+
+def test_nc_runtime_failure_returns_empty_room_options(monkeypatch) -> None:
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("plugin failed")
+
+    monkeypatch.setattr(noise_cancellation, "BVC", _boom)
+    assert resolve_noise_cancellation(env={"AVA_NOISE_CANCELLATION": "1"}) is None
+    opts = _room_options(env={"AVA_NOISE_CANCELLATION": "1"})
+    audio = getattr(opts, "audio_input", None)
+    assert audio is None or getattr(audio, "noise_cancellation", None) is None

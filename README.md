@@ -36,9 +36,9 @@ Do **not** enable ai-coustics unless you have a license. `ai_coustics.audio_enha
 
 | `AVA_NOISE_CANCELLATION` | Effect |
 |--------------------------|--------|
-| unset / `krisp` | Krisp BVC (web) / BVCTelephony (SIP). Safe default. |
-| `off` | Empty `RoomOptions()` — no filter. Use this if a filter ever silences Ava. |
-| `ai_coustics` | QUAIL_VF_S **only** when `AI_COUSTICS_LICENSE_KEY` is set. Otherwise falls back to Krisp and logs a warning. |
+| unset / `1` / `krisp` | Krisp BVC (web) / BVCTelephony (SIP). Safe default. Import or runtime failure → empty `RoomOptions()` + warning. |
+| `0` / `off` | Empty `RoomOptions()` — no filter. |
+| `ai_coustics` | QUAIL_VF_S **only** when `AI_COUSTICS_LICENSE_KEY` is set. Otherwise falls back to Krisp. Any failure → empty `RoomOptions()`. |
 
 Requires `livekit-plugins-noise-cancellation` (already in this project). LiveKit Cloud bills Krisp NC on the agent input path.
 

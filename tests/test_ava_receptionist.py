@@ -309,6 +309,106 @@ async def test_book_appointment_slot_gone_is_not_verbally_confirmed(
     assert events and events[-1]["payload"]["failure_reason"] == "slot_gone"
 
 
+class _PlayedFiller:
+    def __init__(self) -> None:
+        self.played: list[str] = []
+        self.last_first_audio_ts = 0.0
+        self.session = None
+        self.ambient = None
+        self.on_audio = None
+
+    async def play(self, text: str, **_kwargs: object) -> None:
+        self.played.append(text)
+
+
+@pytest.mark.asyncio
+async def test_book_without_name_asks_and_does_not_call_practice(
+    monkeypatch,
+) -> None:
+    from call_state import CallState
+
+    class _Spy:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def book_appointment(self, **kwargs):
+            self.calls += 1
+            raise AssertionError(f"practice book should not run: {kwargs}")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    player = _PlayedFiller()
+    spy = _Spy()
+    ava = AvaReceptionist(
+        state=CallState(
+            branch="shellharbour",
+            today=date(2026, 9, 15),
+            caller_mobile="0412334556",
+        ),
+        booking=spy,
+        filler_player=player,
+    )
+    ava.state.booking_flow.offer_slots(
+        [{"slot_id": "slot_shellharbour_2026-09-16_0930_dr-mohit-tolani"}]
+    )
+    result = await ava.book_appointment(
+        SimpleNamespace(),
+        slot_id="slot_shellharbour_2026-09-16_0930_dr-mohit-tolani",
+        reason="check-up",
+        name=None,
+        mobile="0412334556",
+    )
+    assert result["ok"] is False
+    assert result.get("confirmed") is not True
+    assert result["reason"] == "need_fields"
+    assert "name" in result["need_fields"]
+    assert "name" in result["say"].lower()
+    assert spy.calls == 0
+    assert player.played
+    assert ava.state.may_confirm_booking() is False
+
+
+@pytest.mark.asyncio
+async def test_verify_dob_fail_speaks_immediately_and_retries_once(
+    monkeypatch,
+) -> None:
+    from booking import MemoryBookingProvider
+    from call_state import CallState
+    from practice import PracticeClient
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    player = _PlayedFiller()
+    client = PracticeClient(mode="mock")
+    client.seed_patient(
+        patient_id="pat_sam",
+        name="Sam Smith",
+        phone="0449004305",
+        date_of_birth="1989-08-23",
+    )
+    ava = AvaReceptionist(
+        state=CallState(branch="shellharbour", today=date(2026, 9, 15)),
+        booking=MemoryBookingProvider(client),
+        filler_player=player,
+    )
+    ava.state.pms_record = {
+        "ok": True,
+        "patients": [
+            {
+                "patient_id": "pat_sam",
+                "name": "Sam Smith",
+                "date_of_birth": "1989-08-23",
+            }
+        ],
+    }
+    first = await ava.verify_date_of_birth(SimpleNamespace(), "1980-01-01")
+    assert first["ok"] is False
+    assert first["retry_allowed"] is True
+    assert player.played
+    second = await ava.verify_date_of_birth(SimpleNamespace(), "23rd August 1989")
+    assert second["ok"] is True
+    assert ava.state.dob_verified is True
+    assert client.patients["pat_sam"].date_of_birth == "1989-08-23"
+
+
 @pytest.mark.asyncio
 async def test_check_availability_uses_preferred_clinician(monkeypatch) -> None:
     from booking import MemoryBookingProvider

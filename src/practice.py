@@ -28,6 +28,14 @@ PracticeMode = Literal["disconnected", "mock"]
 SYDNEY = ZoneInfo("Australia/Sydney")
 DEFAULT_MOCK_PATH = Path(".data/mock_diary.json")
 
+# Demo patients used by the mock diary. Dates of birth are required so
+# reschedule / cancel verification can succeed in telephony demos.
+DEMO_PATIENTS: tuple[tuple[str, str, str, str], ...] = (
+    ("pat_demo_1", "Jordan Blake", "0413000111", "1987-03-12"),
+    ("pat_demo_2", "Priya Nair", "0413000222", "1991-11-04"),
+    ("pat_demo_3", "Chris O'Neill", "0413000333", "1985-06-21"),
+)
+
 
 def _norm_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip().lower()
@@ -166,6 +174,10 @@ class PracticeClient:
         date_of_birth: str | None,
     ) -> str | None:
         if patient_id and patient_id in self.patients:
+            patient = self.patients[patient_id]
+            if date_of_birth and not patient.date_of_birth:
+                patient.date_of_birth = date_of_birth
+                self.save()
             return patient_id
         if name:
             new_id = patient_id or f"pat_{uuid.uuid4().hex[:10]}"
@@ -328,10 +340,19 @@ class PracticeClient:
             date_of_birth=date_of_birth,
         )
         if resolved is None:
+            need_fields: list[str] = []
+            if not (name or "").strip():
+                need_fields.append("name")
+            if not (phone or "").strip():
+                need_fields.append("mobile")
             return {
                 "ok": False,
-                "reason": "patient_not_found",
-                "note": "Find or collect patient details before booking.",
+                "reason": "need_fields" if need_fields else "patient_not_found",
+                "need_fields": need_fields or ["name"],
+                "note": (
+                    "Collect name and mobile before booking. Ask now. "
+                    "Do not sit in silence."
+                ),
             }
 
         slot.taken = True
@@ -474,6 +495,32 @@ class PracticeClient:
         }
         self.messages = [Message(**item) for item in payload.get("messages", [])]
 
+    def record_date_of_birth(
+        self,
+        *,
+        date_of_birth: str,
+        patient_id: str | None = None,
+        phone: str | None = None,
+    ) -> bool:
+        dob = (date_of_birth or "").strip()
+        if not dob:
+            return False
+        patient = self.patients.get(patient_id or "")
+        if patient is None and phone:
+            digits = _norm_phone(phone)
+            for item in self.patients.values():
+                stored = _norm_phone(item.phone)
+                if stored == digits or (
+                    len(digits) >= 9 and stored.endswith(digits[-9:])
+                ):
+                    patient = item
+                    break
+        if patient is None:
+            return False
+        patient.date_of_birth = dob
+        self.save()
+        return True
+
 
 def seed_mock_diary(
     client: PracticeClient,
@@ -488,13 +535,17 @@ def seed_mock_diary(
 
     start = today or datetime.now(SYDNEY).date()
     created = 0
-    demo_patients = (
-        ("Jordan Blake", "0413000111"),
-        ("Priya Nair", "0413000222"),
-        ("Chris O'Neill", "0413000333"),
-    )
-    for index, (name, phone) in enumerate(demo_patients, start=1):
-        client.seed_patient(patient_id=f"pat_demo_{index}", name=name, phone=phone)
+    for patient_id, name, phone, dob in DEMO_PATIENTS:
+        existing = client.patients.get(patient_id)
+        if existing is None:
+            client.seed_patient(
+                patient_id=patient_id,
+                name=name,
+                phone=phone,
+                date_of_birth=dob,
+            )
+        elif not existing.date_of_birth:
+            existing.date_of_birth = dob
 
     for offset in range(days):
         day = start + timedelta(days=offset)
@@ -548,6 +599,21 @@ def seed_mock_diary(
     return created
 
 
+def backfill_demo_patient_dobs(client: PracticeClient) -> None:
+    """Fill empty DOBs on persisted demo patients so verification can succeed."""
+    by_phone = {_norm_phone(phone): dob for _pid, _name, phone, dob in DEMO_PATIENTS}
+    for patient_id, _name, _phone, dob in DEMO_PATIENTS:
+        patient = client.patients.get(patient_id)
+        if patient is not None and not patient.date_of_birth:
+            patient.date_of_birth = dob
+    for patient in client.patients.values():
+        if patient.date_of_birth:
+            continue
+        matched = by_phone.get(_norm_phone(patient.phone))
+        if matched:
+            patient.date_of_birth = matched
+
+
 _SHARED: PracticeClient | None = None
 
 
@@ -588,8 +654,16 @@ def practice_from_env(
     client = PracticeClient(mode=mode, persist_path=path)
     if mode == "mock":
         client.load()
+        before = {
+            pid: patient.date_of_birth for pid, patient in client.patients.items()
+        }
+        backfill_demo_patient_dobs(client)
         if not client.slots:
             seed_mock_diary(client)
+            client.save()
+        elif any(
+            client.patients[pid].date_of_birth != dob for pid, dob in before.items()
+        ):
             client.save()
     return client
 

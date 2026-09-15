@@ -132,13 +132,58 @@ def test_failed_dob_offers_callback_without_saying_wrong() -> None:
     failed = state.verify_dob("1980-12-01")
     assert failed["ok"] is False
     assert failed["reason"] == "verification_failed"
+    assert failed.get("retry_allowed") is True
     note = failed["note"].lower()
-    assert "call back" in note
     assert "wrong" not in note
+    assert "did not match" in note
     assert "do not confirm" in note
     assert state.dob_verified is False
+    assert state.dob_failed is False
     blocked = state.require_dob_for_existing()
-    assert blocked["reason"] == "verification_failed"
+    assert blocked["reason"] == "dob_required"
+    assert blocked.get("retry_allowed") is True
+
+    second = state.verify_dob("1970-01-01")
+    assert second["ok"] is False
+    assert second["retry_allowed"] is False
+    assert "call back" in second["note"].lower()
+    assert "wrong" not in second["note"].lower()
+    assert state.dob_failed is True
+    assert state.require_dob_for_existing()["reason"] == "verification_failed"
+
+
+def test_dob_retry_once_then_succeeds_on_second_date() -> None:
+    state = CallState()
+    state.pms_record = {
+        "ok": True,
+        "patients": [{"date_of_birth": "1989-08-23", "name": "Sam"}],
+    }
+    first = state.verify_dob("01-01-1980")
+    assert first["retry_allowed"] is True
+    ok = state.verify_dob("23rd August 1989")
+    assert ok["ok"] is True
+    assert ok["verified"] is True
+    assert state.dob_verified is True
+    assert state.dob_failed is False
+
+
+def test_empty_record_dob_is_collected_and_verified() -> None:
+    state = CallState()
+    state.pms_record = {
+        "ok": True,
+        "patients": [
+            {
+                "patient_id": "pat_sam",
+                "date_of_birth": "",
+                "name": "Sam Smith",
+            }
+        ],
+    }
+    result = state.verify_dob("23rd August 1989")
+    assert result["ok"] is True
+    assert result["verified"] is True
+    assert result["stored_dob"] == "1989-08-23"
+    assert state.pms_record["patients"][0]["date_of_birth"] == "1989-08-23"
 
 
 def test_new_booking_does_not_need_dob() -> None:

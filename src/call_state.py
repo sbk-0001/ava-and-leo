@@ -29,6 +29,53 @@ from persona import BRANCHES, DEFAULT_BRANCH_ID, get_branch
 from phrase_pools import ACKS, BARGE_IN_RESUME, CLOSINGS, OPENINGS, pick_from_pool
 
 MAX_ASKS = 3
+MAX_DOB_ATTEMPTS = 2
+
+_MONTHS = {
+    "january": 1,
+    "jan": 1,
+    "february": 2,
+    "feb": 2,
+    "march": 3,
+    "mar": 3,
+    "april": 4,
+    "apr": 4,
+    "may": 5,
+    "june": 6,
+    "jun": 6,
+    "july": 7,
+    "jul": 7,
+    "august": 8,
+    "aug": 8,
+    "september": 9,
+    "sept": 9,
+    "sep": 9,
+    "october": 10,
+    "oct": 10,
+    "november": 11,
+    "nov": 11,
+    "december": 12,
+    "dec": 12,
+}
+
+DOB_RETRY_NOTE = (
+    "They may volunteer another date of birth once. Call verify_date_of_birth "
+    "again. Do not tell them the date of birth did not match. "
+    "Do not confirm or deny a record."
+)
+DOB_CALLBACK_NOTE = (
+    "Offer to have the team call back. Do not mention date of birth. "
+    "Do not confirm or deny a record."
+)
+DOB_RETRY_SAY = (
+    "I just need to confirm your date of birth once more, whenever you're ready."
+)
+DOB_CALLBACK_SAY = (
+    "I'll get the team to give you a call back. I can't confirm that from here."
+)
+BOOK_NEED_NAME_SAY = "I just need the name for the booking."
+BOOK_NEED_MOBILE_SAY = "What's the best mobile for that booking?"
+BOOK_NEED_BOTH_SAY = "I just need a name and a mobile for the booking."
 
 UrgencyLevel = Literal["routine", "same_day", "emergency_000"]
 
@@ -106,6 +153,54 @@ def kill_switch_enabled(env: Mapping[str, str] | None = None) -> bool:
     environ = env if env is not None else os.environ
     raw = str(environ.get("AVA_KILL_SWITCH", "")).strip().lower()
     return raw in {"1", "true", "yes", "on", "transfer"}
+
+
+def normalize_dob(value: str | None) -> str:
+    """Return YYYY-MM-DD from ISO, numeric, or spoken Australian dates."""
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    iso = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", raw)
+    if iso:
+        try:
+            return date(
+                int(iso.group(1)), int(iso.group(2)), int(iso.group(3))
+            ).isoformat()
+        except ValueError:
+            return ""
+    lowered = raw.lower()
+    month: int | None = None
+    for name, number in sorted(_MONTHS.items(), key=lambda item: -len(item[0])):
+        if re.search(rf"\b{re.escape(name)}\b", lowered):
+            month = number
+            break
+    nums = [int(token) for token in re.findall(r"\d+", raw)]
+    if month is not None:
+        day = next((n for n in nums if 1 <= n <= 31), None)
+        year = next((n for n in nums if n >= 1900), None)
+        if day and year:
+            try:
+                return date(year, month, day).isoformat()
+            except ValueError:
+                return ""
+    if len(nums) >= 3:
+        day, month_n, year = nums[0], nums[1], nums[2]
+        if year < 100:
+            year += 1900 if year >= 30 else 2000
+        try:
+            return date(year, month_n, day).isoformat()
+        except ValueError:
+            pass
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) == 8:
+        yyyy_mm_dd = (int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
+        dd_mm_yyyy = (int(digits[4:8]), int(digits[2:4]), int(digits[0:2]))
+        for year, month_n, day in (yyyy_mm_dd, dd_mm_yyyy):
+            try:
+                return date(year, month_n, day).isoformat()
+            except ValueError:
+                continue
+    return ""
 
 
 def is_valid_au_mobile(value: str | None) -> bool:
@@ -252,6 +347,7 @@ class CallState:
     channel: str = "unknown"
     dob_verified: bool = False
     dob_failed: bool = False
+    dob_attempts: int = 0
     preferred_branch: str | None = None
     usual_dentist: str | None = None
     last_appointment_private: dict[str, Any] | None = None
@@ -428,6 +524,7 @@ class CallState:
             f"- known_caller: {self.known_caller}\n"
             f"- ani: {self.ani or 'none'}\n"
             f"- dob_verified: {self.dob_verified}\n"
+            f"- dob_attempts: {self.dob_attempts}/{MAX_DOB_ATTEMPTS}\n"
             f"- is_existing_patient: {patient_status}\n"
             f"- preferred_branch: {self.preferred_branch or self.branch}\n"
             f"- usual_dentist: {dentist}\n"
@@ -437,7 +534,9 @@ class CallState:
             "- New booking: no DOB required. Discuss/move/cancel existing: DOB required.\n"
             "- Do not volunteer existing appointment, dentist, or treatment detail "
             "until dob_verified is true.\n"
-            "- Failed DOB: offer a callback. Do not mention date of birth. "
+            "- First failed DOB: they may volunteer another date — call "
+            "verify_date_of_birth once more. Do not say it was wrong.\n"
+            "- Second failed DOB: offer a callback. Do not mention date of birth. "
             "Do not confirm or deny a record."
         )
 
@@ -458,12 +557,11 @@ class CallState:
             return {
                 "ok": False,
                 "reason": "verification_failed",
-                "note": (
-                    "Offer to have the team call back. Do not mention date of birth. "
-                    "Do not confirm or deny a record."
-                ),
+                "retry_allowed": False,
+                "say": DOB_CALLBACK_SAY,
+                "note": DOB_CALLBACK_NOTE,
             }
-        return {
+        payload: dict[str, Any] = {
             "ok": False,
             "reason": "dob_required",
             "note": (
@@ -472,36 +570,93 @@ class CallState:
                 "existing booking details."
             ),
         }
+        if self.dob_attempts:
+            payload["retry_allowed"] = True
+            payload["say"] = DOB_RETRY_SAY
+            payload["note"] = DOB_RETRY_NOTE
+        return payload
+
+    def missing_booking_identity(
+        self,
+        *,
+        name: str | None = None,
+        mobile: str | None = None,
+        patient_id: str | None = None,
+    ) -> list[str]:
+        if (patient_id or "").strip():
+            return []
+        need: list[str] = []
+        if not (name or self.caller_name or "").strip():
+            need.append("name")
+        if not is_valid_au_mobile(mobile or self.caller_mobile):
+            need.append("mobile")
+        return need
+
+    def booking_need_fields_result(self, need: list[str]) -> dict[str, Any]:
+        if need == ["name", "mobile"]:
+            say = BOOK_NEED_BOTH_SAY
+        elif "name" in need:
+            say = BOOK_NEED_NAME_SAY
+        else:
+            say = BOOK_NEED_MOBILE_SAY
+        return {
+            "ok": False,
+            "confirmed": False,
+            "reason": "need_fields",
+            "need_fields": list(need),
+            "say": say,
+            "note": (
+                "Do not call book_appointment again until these fields are collected. "
+                "Ask now. Do not sit in silence."
+            ),
+        }
 
     def verify_dob(self, given: str | None) -> dict[str, Any]:
         expected = ""
-        record = self.pms_record or {}
+        record = self.pms_record if isinstance(self.pms_record, dict) else {}
         patients = (
             record.get("patients") if isinstance(record.get("patients"), list) else []
         )
-        if patients and isinstance(patients[0], dict):
-            expected = str(patients[0].get("date_of_birth") or "")
-        given_n = re.sub(r"[^0-9]", "", given or "")
-        expected_n = re.sub(r"[^0-9]", "", expected)
-        if expected_n and given_n and given_n == expected_n:
-            self.dob_verified = True
-            self.dob_failed = False
-            if record.get("is_existing_patient"):
-                self.is_existing_patient = True
-            return {
-                "ok": True,
-                "verified": True,
-                "note": "Identity verified for this call.",
-            }
-        self.dob_failed = True
+        patient = patients[0] if patients and isinstance(patients[0], dict) else None
+        if patient:
+            expected = str(patient.get("date_of_birth") or "")
+        given_iso = normalize_dob(given)
+        expected_iso = normalize_dob(expected)
+        if given_iso and expected_iso and given_iso == expected_iso:
+            return self._mark_dob_verified(given_iso, patient=patient, record=record)
+        if given_iso and patient is not None and not expected_iso:
+            patient["date_of_birth"] = given_iso
+            return self._mark_dob_verified(given_iso, patient=patient, record=record)
+        self.dob_attempts += 1
         self.dob_verified = False
+        retry = self.dob_attempts < MAX_DOB_ATTEMPTS
+        self.dob_failed = not retry
         return {
             "ok": False,
             "reason": "verification_failed",
-            "note": (
-                "Offer to have the team call back. Do not mention date of birth. "
-                "Do not confirm or deny a record."
-            ),
+            "retry_allowed": retry,
+            "say": DOB_RETRY_SAY if retry else DOB_CALLBACK_SAY,
+            "note": DOB_RETRY_NOTE if retry else DOB_CALLBACK_NOTE,
+        }
+
+    def _mark_dob_verified(
+        self,
+        stored_dob: str,
+        *,
+        patient: dict[str, Any] | None,
+        record: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        self.dob_verified = True
+        self.dob_failed = False
+        if record.get("is_existing_patient"):
+            self.is_existing_patient = True
+        if patient is not None and stored_dob:
+            patient["date_of_birth"] = stored_dob
+        return {
+            "ok": True,
+            "verified": True,
+            "stored_dob": stored_dob,
+            "note": "Identity verified for this call.",
         }
 
     def may_confirm_booking(self) -> bool:

@@ -96,7 +96,12 @@ def _seed_client() -> tuple[PracticeClient, MemoryBookingProvider]:
     from practice import seed_mock_diary
 
     seed_mock_diary(client, today=seed_day, days=7)
-    client.seed_patient(patient_id="pat_priya", name="Priya Nair", phone="0413000222")
+    client.seed_patient(
+        patient_id="pat_priya",
+        name="Priya Nair",
+        phone="0413000222",
+        date_of_birth="1991-11-04",
+    )
     tomorrow = (datetime.now(SYDNEY) + timedelta(hours=12)).date().isoformat()
     client.seed_slot(
         slot_id="slot_priya_tomorrow",

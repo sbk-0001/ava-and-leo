@@ -180,6 +180,41 @@ async def test_find_patient_does_not_invent_records() -> None:
     assert found["patients"][0]["patient_id"] == "p1"
 
 
+@pytest.mark.asyncio
+async def test_book_without_name_returns_need_fields_not_patient_not_found() -> None:
+    client = PracticeClient(mode="mock")
+    client.seed_slot(
+        slot_id="slot-am",
+        branch_id="shellharbour",
+        date="2026-09-21",
+        time="09:30",
+        clinician="Dr Mohit Tolani",
+    )
+    missing = await client.book_appointment(
+        branch_id="shellharbour",
+        slot_id="slot-am",
+        reason="check up",
+        name=None,
+        phone="0411111111",
+    )
+    assert missing["ok"] is False
+    assert missing.get("confirmed") is not True
+    assert missing["reason"] == "need_fields"
+    assert "name" in missing["need_fields"]
+    assert "patient_not_found" not in missing["reason"]
+
+
+def test_seeded_demo_patients_have_dates_of_birth() -> None:
+    from practice import DEMO_PATIENTS
+
+    client = PracticeClient(mode="mock")
+    seed_mock_diary(client, today=date(2026, 9, 14), days=7)
+    for patient_id, _name, _phone, dob in DEMO_PATIENTS:
+        patient = client.patients[patient_id]
+        assert patient.date_of_birth == dob
+        assert patient.date_of_birth
+
+
 def test_seeded_diary_uses_real_dentists_and_branch_hours() -> None:
     client = PracticeClient(mode="mock")
     today = date(2026, 9, 14)  # Monday

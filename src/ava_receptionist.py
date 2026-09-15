@@ -28,6 +28,7 @@ from booking import (
     invalid_slot_id_result,
     is_canonical_slot_id,
     spoken_two_slot_offer,
+    unwrap_practice_client,
 )
 from call_log import CallLog
 from call_state import CallState
@@ -44,7 +45,7 @@ from grounding import (
     grounding_violation_packet,
 )
 from persona import ava_instructions, get_branch, quote_fee, resolve_tool_branch
-from phrase_pools import RECOVERY, STAGE_1
+from phrase_pools import RECOVERY, STAGE_1, STAGE_5
 from realtime_hygiene import maybe_trim_realtime_context
 from sip_utils import find_sip_participant
 
@@ -297,6 +298,46 @@ class AvaReceptionist(Agent):
         task = loop.create_task(_run())
         self._speech_tasks.add(task)
         task.add_done_callback(self._speech_tasks.discard)
+
+    async def _speak_bank_now(self, pool: str, lines: tuple[str, ...]) -> None:
+        """Cover dead air with a pre-rendered clip. Never wait on the model."""
+        line = self.state.pick_phrase(pool, lines)
+        session = self._speech_session
+        if session is None:
+            try:
+                session = self.session
+            except RuntimeError:
+                session = None
+        try:
+            self.filler_player.session = session
+            await self.filler_player.play(line)
+        except Exception:
+            logger.exception("immediate bank speech failed")
+
+    def _persist_collected_dob(self, result: Mapping[str, Any]) -> None:
+        dob = str(result.get("stored_dob") or "").strip()
+        if not dob:
+            return
+        client = unwrap_practice_client(self.booking)
+        if client is None:
+            return
+        patient_id = None
+        record = (
+            self.state.pms_record if isinstance(self.state.pms_record, dict) else {}
+        )
+        patients = (
+            record.get("patients") if isinstance(record.get("patients"), list) else []
+        )
+        if patients and isinstance(patients[0], dict):
+            patient_id = patients[0].get("patient_id")
+        try:
+            client.record_date_of_birth(
+                date_of_birth=dob,
+                patient_id=str(patient_id) if patient_id else None,
+                phone=self.state.caller_mobile,
+            )
+        except Exception:
+            logger.exception("persist collected DOB failed")
 
     def _kick_substitute_speech(self, spoken: str) -> None:
         self._kick_recovery(spoken, ["confirm"])
@@ -684,6 +725,7 @@ class AvaReceptionist(Agent):
 
         Call check_availability first. Say confirmed / you're all set only if
         the result has ok true and confirmed true. Otherwise say it is not locked.
+        Do not call this without a patient name (and a mobile if it is unknown).
 
         Args:
             branch: Clinic id: shellharbour, dapto, or woonona.
@@ -694,6 +736,25 @@ class AvaReceptionist(Agent):
             patient_id: Patient id from lookup_patient, if known.
             date_of_birth: Date of birth if given, preferably YYYY-MM-DD.
         """
+        need = self.state.missing_booking_identity(
+            name=name, mobile=mobile, patient_id=patient_id
+        )
+        if need:
+            result = self.state.booking_need_fields_result(need)
+            await self._speak_bank_now("recovery", RECOVERY)
+            self._log_tool(
+                "book_appointment",
+                result,
+                {
+                    "slot_id": slot_id,
+                    "reason": reason,
+                    "branch": branch,
+                    "name": name,
+                    "mobile": mobile,
+                    "patient_id": patient_id,
+                },
+            )
+            return result
 
         async def _run() -> dict[str, Any]:
             if not (slot_id or "").strip() or not (reason or "").strip():
@@ -883,14 +944,21 @@ class AvaReceptionist(Agent):
     ) -> dict[str, Any]:
         """Verify DOB before discussing, moving, or cancelling an existing appointment.
 
-        New bookings do not need this. Failed verification: offer a callback.
-        Do not mention date of birth. Do not confirm or deny a record.
+        New bookings do not need this. First fail: they may volunteer another
+        date — call this once more. Second fail: offer a callback. Do not mention
+        date of birth. Do not confirm or deny a record.
 
         Args:
             date_of_birth: Date of birth as spoken, preferably YYYY-MM-DD.
         """
         del context
         result = self.state.verify_dob(date_of_birth)
+        if result.get("ok"):
+            self._persist_collected_dob(result)
+        else:
+            pool = "recovery" if result.get("retry_allowed") else "stage_5"
+            lines = RECOVERY if result.get("retry_allowed") else STAGE_5
+            await self._speak_bank_now(pool, lines)
         self._log_tool("verify_date_of_birth", result, {"date_of_birth": "given"})
         return result
 

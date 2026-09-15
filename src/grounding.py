@@ -1,14 +1,16 @@
 """Pre-TTS grounding gate. SpeakableFacts come from successful tools only.
 
-Realtime S2S has no TTS node — intercept lives on:
-  * session.say / SessionSpeaker when TTS or Realtime say() exists
-  * generate_reply on OpenAI Realtime (session.say raises without TTS)
+Confirm/lock matching is claim-type: block completed-state assertions when
+no booking is locked; always allow intent, offers, and in-flight narration.
+On fire: suppress before TTS and play a pre-rendered recovery clip — never
+voice a system substitute via generate_reply.
+
+Intercept lives on:
   * Agent.tts_node — STT-LLM-TTS pipeline
-  * Agent.transcription_node — rewrite captions, interrupt, generate_reply
+  * Agent.transcription_node — rewrite captions, interrupt, bank recovery
 
 Docs: https://docs.livekit.io/agents/logic/nodes/
-      https://docs.livekit.io/agents/multimodality/audio/#session-say
-      https://docs.livekit.io/agents/models/realtime/#scripted-speech-output
+      https://docs.livekit.io/agents/multimodality/audio/background-audio.md
 """
 
 from __future__ import annotations
@@ -22,17 +24,21 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from persona import BRANCHES, get_branch
+from phrase_pools import RECOVERY
 
 logger = logging.getLogger("ava.grounding")
 
 SYDNEY = ZoneInfo("Australia/Sydney")
 
-SAFE_SUBSTITUTE = (
-    "Hang on, let me check that properly — I don't want to give you the wrong time."
+RECOVERY_DEFAULT = RECOVERY[0]
+SAFE_SUBSTITUTE = RECOVERY_DEFAULT
+CONFIRM_SUBSTITUTE = RECOVERY_DEFAULT
+DATE_SUBSTITUTE = RECOVERY_DEFAULT
+CHOCKERS_SUBSTITUTE = RECOVERY_DEFAULT
+CORRECTIVE_NOTE = (
+    "GROUNDING: do not speak that claim. Stay with CallState. "
+    "The blocked line is not locked / not speakable. Do not repeat it."
 )
-CONFIRM_SUBSTITUTE = "That's not locked yet. Let me have another look."
-DATE_SUBSTITUTE = "Sorry, which day did you mean? I don't want to guess."
-CHOCKERS_SUBSTITUTE = "I couldn't get a clean look at the diary just then."
 
 _WEEKDAYS = (
     "monday",
@@ -104,10 +110,103 @@ _ORDINAL_RE = re.compile(
     r"\b(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)\b",
     re.I,
 )
-_CONFIRM_RE = re.compile(
-    r"\b(?:you'?re\s+all\s+set|all\s+set|confirmed|you'?re\s+booked|"
-    r"booked\s+you|locked\s+in|booking'?s\s+confirmed|i'?ve\s+booked)\b",
+_INTENT_RE = re.compile(
+    r"(?:"
+    r"\blet(?:'?s| me)\b|"
+    r"\bi(?:'?ll| will)\b|"
+    r"\bwant(?: me)? to\b|"
+    r"\bwanna\b|"
+    r"\bshall i\b|"
+    r"\bcan i\b|"
+    r"\bhang on\b|"
+    r"\bjust confirming\b|"
+    r"\bbooking it\b|"
+    r"\bi'?m (?:just )?(?:locking|booking)\b|"
+    r"\babout to (?:lock|book)\b|"
+    r"\bgonn[ao] (?:lock|book|pop|chuck)\b|"
+    r"\bgoing to (?:lock|book|pop|chuck)\b|"
+    r"\bpop you in\b|"
+    r"\bchuck you in\b|"
+    r"\bget you in\b|"
+    r"\bget that booked\b|"
+    r"\bget you booked\b"
+    r")",
     re.I,
+)
+_COMPLETED_CONFIRM_RE = re.compile(
+    r"(?:"
+    r"you(?:'re| are) booked(?:\s+in)?|"
+    r"you(?:'re| are) all set|"
+    r"you(?:'re| are) in the diary|"
+    r"that(?:'s| is) locked in|"
+    r"that(?:'s| is) confirmed|"
+    r"i(?:'ve| have) got you down|"
+    r"\ball sorted\b|"
+    r"see ya\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b|"
+    r"booking'?s confirmed|"
+    r"i(?:'ve| have) booked(?:\s+you)?|"
+    r"booked you(?:\s+in)?"
+    r")",
+    re.I,
+)
+_LOCK_CONFIRM_WORD_RE = re.compile(
+    r"\b(?:lock(?:ed|ing)?(?:\s+it|\s+that)?(?:\s+in)?|confirm(?:ed|ing)?|booked)\b",
+    re.I,
+)
+_QUESTION_RE = re.compile(
+    r"(?:\?$|^(?:is|are|do|does|can|could|would|what|which|when|who|where)\b|"
+    r"\bmorning or arvo\b|\barvo or morning\b)",
+    re.I,
+)
+_SLOT_ASSERT_RE = re.compile(
+    r"\b(?:i(?:'ve| have) got\b|available at|free at|you(?:'re| are) booked|"
+    r"booked (?:in|for)|got you down)\b",
+    re.I,
+)
+
+GATE_BLOCK_UTTERANCES: tuple[str, ...] = (
+    "you're booked in",
+    "you're all set",
+    "that's locked in",
+    "that's confirmed",
+    "I've got you down for",
+    "all sorted",
+    "see ya Tuesday",
+    "you're in the diary",
+    "Beautiful, you're all set for Wednesday.",
+    "You're all set, booked in.",
+    "That's confirmed — you're booked with Dr Maryam.",
+    "I've booked you in for Wednesday",
+    "you're booked with Dr Mohit",
+    "booked you in for Friday",
+    "The booking's confirmed",
+    "You're booked in at Shellharbour",
+    "I've got you down for ten past eleven",
+    "all sorted, see you then",
+    "see ya Tuesday, take care",
+    "that's locked in for Wednesday the sixteenth",
+)
+GATE_PASS_UTTERANCES: tuple[str, ...] = (
+    "let me lock that in for ya",
+    "I'll get that booked",
+    "want me to lock it in?",
+    "let's get you in",
+    "I'll pop you in",
+    "just confirming that now",
+    "hang on, booking it",
+    "morning or arvo?",
+    "Shall I lock that in for you?",
+    "I'm locking that in now",
+    "wanna lock that in?",
+    "I'll get you booked",
+    "let me get that booked",
+    "just confirming the day with you",
+    "which morning or arvo suits?",
+    "hang on, let me lock it in",
+    "I'll chuck you in",
+    "want me to pop you in?",
+    "booking it for you now",
+    "let's lock it in if that suits",
 )
 _CHOCKERS_RE = re.compile(
     r"\b(?:chockers|fully\s+booked|nothing(?:\s+at\s+all)?\s+"
@@ -152,9 +251,15 @@ class GateResult:
     spoken: str
     suppressed: bool
     violations: list[str] = field(default_factory=list)
+    ambiguous: bool = False
+    recovery: bool = False
 
     @property
     def log_line(self) -> str:
+        if self.ambiguous and not self.suppressed:
+            return (
+                f"GROUNDING_AMBIGUOUS original={self.original!r} spoken={self.spoken!r}"
+            )
         kinds = ",".join(self.violations) or "none"
         return (
             f"GROUNDING_VIOLATION kinds={kinds} "
@@ -385,41 +490,83 @@ def _pin_dentist(text: str, facts: SpeakableFacts) -> tuple[str, bool]:
     return rewritten, swapped
 
 
+def is_booking_intent(text: str) -> bool:
+    """Offers, proposals, and in-flight narration — always allowed."""
+    return bool(_INTENT_RE.search(text or ""))
+
+
+def is_completed_booking_claim(text: str) -> bool:
+    """Present/perfect claim that a booking already exists."""
+    return bool(_COMPLETED_CONFIRM_RE.search(text or ""))
+
+
+def confirm_claim_kind(text: str) -> str:
+    """Return 'intent', 'completed', 'ambiguous', or 'none'."""
+    intent = is_booking_intent(text)
+    completed = is_completed_booking_claim(text)
+    if intent and not completed:
+        return "intent"
+    if completed and not intent:
+        return "completed"
+    if intent and completed:
+        # "I'll get that booked" contains future intent + the word booked.
+        return "intent"
+    if _LOCK_CONFIRM_WORD_RE.search(text or ""):
+        return "ambiguous"
+    return "none"
+
+
+def is_time_question(text: str) -> bool:
+    stripped = (text or "").strip()
+    if _SLOT_ASSERT_RE.search(stripped):
+        return False
+    return bool(_QUESTION_RE.search(stripped))
+
+
+def grounding_corrective_note(original: str, kinds: list[str]) -> str:
+    kinds_s = ",".join(kinds) or "ungrounded"
+    clipped = (original or "")[:160]
+    return f"{CORRECTIVE_NOTE} kinds={kinds_s}. Blocked (do not speak): {clipped!r}"
+
+
 def gate_utterance(text: str, facts: SpeakableFacts, *, log: bool = True) -> GateResult:
     """Strip ungrounded date/time/dentist/confirm language before TTS."""
     original = text
     spoken = text
     violations: list[str] = []
+    ambiguous = False
+
+    def _recover(kinds: list[str]) -> GateResult:
+        result = GateResult(
+            original=original,
+            spoken=RECOVERY_DEFAULT,
+            suppressed=True,
+            violations=kinds,
+            recovery=True,
+        )
+        if log:
+            logger.warning("%s", result.log_line)
+        return result
 
     def _finish(result: GateResult) -> GateResult:
         if log and result.suppressed:
             logger.warning("%s", result.log_line)
+        elif log and result.ambiguous:
+            logger.info("%s", result.log_line)
         return result
 
     if not original.strip():
         return GateResult(original=original, spoken=spoken, suppressed=False)
 
-    if _CONFIRM_RE.search(spoken) and not facts.confirm_allowed:
-        violations.append("confirm")
-        return _finish(
-            GateResult(
-                original=original,
-                spoken=CONFIRM_SUBSTITUTE,
-                suppressed=True,
-                violations=violations,
-            )
-        )
+    kind = confirm_claim_kind(spoken)
+    if kind == "completed" and not facts.confirm_allowed:
+        return _recover(["confirm"])
+    if kind == "ambiguous" and not facts.confirm_allowed:
+        ambiguous = True
+        logger.info("GROUNDING_AMBIGUOUS original=%r", original)
 
     if _CHOCKERS_RE.search(spoken) and not facts.may_say_chockers:
-        violations.append("chockers")
-        return _finish(
-            GateResult(
-                original=original,
-                spoken=CHOCKERS_SUBSTITUTE,
-                suppressed=True,
-                violations=violations,
-            )
-        )
+        return _recover(["chockers"])
 
     spoken, dentist_swapped = _pin_dentist(spoken, facts)
     if dentist_swapped:
@@ -431,42 +578,19 @@ def gate_utterance(text: str, facts: SpeakableFacts, *, log: bool = True) -> Gat
     if date_hits and not facts.date_resolved:
         extra = [hit for hit in date_hits if not _known(hit, facts.dates)]
         if extra or not facts.dates:
-            violations.append("date")
-            return _finish(
-                GateResult(
-                    original=original,
-                    spoken=DATE_SUBSTITUTE
-                    if "next " in original.lower()
-                    else SAFE_SUBSTITUTE,
-                    suppressed=True,
-                    violations=violations,
-                )
-            )
+            if is_time_question(original):
+                pass
+            else:
+                return _recover(["date", *violations])
     ungrounded_dates = [hit for hit in date_hits if not _known(hit, facts.dates)]
-    if ungrounded_dates:
-        violations.append("date")
-        return _finish(
-            GateResult(
-                original=original,
-                spoken=SAFE_SUBSTITUTE,
-                suppressed=True,
-                violations=violations,
-            )
-        )
+    if ungrounded_dates and not is_time_question(original):
+        return _recover(["date", *violations])
 
     time_hits = [match.group(0) for match in _TIME_RE.finditer(spoken)]
     time_hits.extend(match.group(0) for match in _CLOCK_RE.finditer(spoken))
     ungrounded_times = [hit for hit in time_hits if not _known(hit, facts.times)]
-    if ungrounded_times:
-        violations.append("time")
-        return _finish(
-            GateResult(
-                original=original,
-                spoken=SAFE_SUBSTITUTE,
-                suppressed=True,
-                violations=violations,
-            )
-        )
+    if ungrounded_times and not is_time_question(original):
+        return _recover(["time", *violations])
 
     suppressed = bool(violations) or spoken != original
     return _finish(
@@ -475,6 +599,7 @@ def gate_utterance(text: str, facts: SpeakableFacts, *, log: bool = True) -> Gat
             spoken=spoken,
             suppressed=suppressed,
             violations=violations,
+            ambiguous=ambiguous,
         )
     )
 
@@ -486,15 +611,15 @@ async def grounded_realtime_transcription(
     commit: Callable[[str], str],
     on_rewrite: Callable[[str], Any] | None = None,
 ) -> AsyncIterable[str]:
-    """Yield gated captions for a Realtime turn. Speak substitutes via on_rewrite.
+    """Yield gated captions for a Realtime turn. Recovery audio is played via on_rewrite.
 
     OpenAI Realtime audio is already in flight here. Yielding rewritten text
     updates the published transcript; it does not synthesize speech. Callers
-    must interrupt ungrounded audio and speak the substitute with
-    generate_reply — session.say() raises without a TTS plugin.
+    must interrupt ungrounded audio and play a pre-rendered recovery clip —
+    never generate_reply a substitute sentence.
 
     Docs: https://docs.livekit.io/agents/logic/nodes/
-          https://docs.livekit.io/agents/models/realtime/#scripted-speech-output
+          https://docs.livekit.io/agents/multimodality/audio/background-audio.md
     """
     accumulated: list[str] = []
     async for chunk in text:

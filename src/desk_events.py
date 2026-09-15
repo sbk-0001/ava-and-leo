@@ -31,7 +31,9 @@ logger = logging.getLogger("desk")
 DESK_TOPIC = "ava.desk"
 _PENDING_PUBLISHES: set[asyncio.Task[None]] = set()
 
-DESK_EVENT_TYPES = frozenset({"transcript", "activity", "grounding_violation"})
+DESK_EVENT_TYPES = frozenset(
+    {"transcript", "activity", "grounding_violation", "dead_air"}
+)
 
 DESK_TOOLS = frozenset(
     {

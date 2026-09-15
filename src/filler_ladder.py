@@ -286,10 +286,9 @@ def offset_with_jitter(
 
 
 class SessionSpeaker:
-    """Kick filler audio via say() when TTS exists, else generate_reply.
+    """Play fillers from the pre-rendered bank. Never say() / generate_reply.
 
-    Docs: https://docs.livekit.io/agents/multimodality/audio/#session-say
-          https://docs.livekit.io/agents/models/realtime/#scripted-speech-output
+    Docs: https://docs.livekit.io/agents/multimodality/audio/background-audio.md
     """
 
     def __init__(
@@ -298,46 +297,45 @@ class SessionSpeaker:
         *,
         clock: Callable[[], float] | None = None,
         gate: Callable[[str], str] | None = None,
+        player: Any | None = None,
     ) -> None:
         self.session = session
         self.clock = clock or time.perf_counter
         self.gate = gate
+        self.player = player
         self.last_first_audio_ts: float | None = None
         self.last_text: str | None = None
         self.started_at: float | None = None
         self._handle: Any = None
 
+    def _player(self) -> Any:
+        if self.player is not None:
+            return self.player
+        attached = getattr(self.session, "_filler_player", None)
+        if attached is not None:
+            return attached
+        from filler_player import FillerPlayer
+
+        self.player = FillerPlayer(session=self.session, clock=self.clock)
+        return self.player
+
     async def utter(self, text: str, *, allow_interruptions: bool = True) -> None:
+        # Fillers are pre-approved bank lines. Do not rewrite them through the
+        # grounding substitute path — look up the clip by the picked line.
+        del allow_interruptions
         if self.gate is not None:
-            text = self.gate(text)
+            gated = self.gate(text)
+            if gated and gated != text:
+                logger.info(
+                    "filler gate rewrote %r -> %r; playing original clip", text, gated
+                )
+        player = self._player()
         self.last_text = text
         self.started_at = self.clock()
-        audio_started = asyncio.Event()
-
-        def _mark_audio(*_args: Any, **_kwargs: Any) -> None:
-            audio_started.set()
-
-        try:
-            once = getattr(self.session, "once", None)
-            if callable(once):
-                once("speech_created", _mark_audio)
-        except Exception:
-            logger.exception("could not subscribe to speech_created")
-
-        try:
-            self._handle = kick_scripted_speech(
-                self.session,
-                text,
-                allow_interruptions=allow_interruptions,
-                kind="filler",
-            )
-        except Exception:
-            logger.exception("filler utter failed")
-            self._handle = None
-
-        with contextlib.suppress(TimeoutError, Exception):
-            await asyncio.wait_for(audio_started.wait(), timeout=0.35)
-        self.last_first_audio_ts = self.clock()
+        await player.play(text)
+        first = player.last_first_audio_ts
+        self.last_first_audio_ts = first if first is not None else self.clock()
+        self._handle = player
 
     async def finish_current_word(self, word_s: float = WORD_DURATION_S) -> None:
         """Do not hard-cut Ava. Wait until the current word boundary, then return."""

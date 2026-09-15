@@ -141,16 +141,19 @@ async def test_rate_limit_recovery_covers_trims_and_retries() -> None:
     sleeps: list[float] = []
     said: list[str] = []
 
-    def say(text: str, **_kwargs: object) -> None:
-        said.append(text)
+    class Player:
+        async def play(self, text: str, **_kwargs: object) -> None:
+            said.append(text)
 
-    session = SimpleNamespace(generate_reply=AsyncMock(), say=say)
+    session = SimpleNamespace(generate_reply=AsyncMock())
     agent = SimpleNamespace(trim_calls=0)
 
     async def trim() -> None:
         agent.trim_calls += 1
 
-    recovery = RateLimitRecovery(sleep=lambda s: sleeps.append(s) or None)
+    recovery = RateLimitRecovery(
+        sleep=lambda s: sleeps.append(s) or None, player=Player()
+    )
     await recovery.recover(session, trim=trim)
 
     assert sleeps == [1.0]
@@ -169,10 +172,11 @@ async def test_rate_limit_recovery_uses_retry_after_and_speaks_slots() -> None:
     sleeps: list[float] = []
     said: list[str] = []
 
-    def say(text: str, **_kwargs: object) -> None:
-        said.append(text)
+    class Player:
+        async def play(self, text: str, **_kwargs: object) -> None:
+            said.append(text)
 
-    session = SimpleNamespace(generate_reply=AsyncMock(), say=say)
+    session = SimpleNamespace(generate_reply=AsyncMock())
     state = CallState(branch="shellharbour")
     state.remember_availability(
         {
@@ -195,14 +199,21 @@ async def test_rate_limit_recovery_uses_retry_after_and_speaks_slots() -> None:
         message="rate_limit_exceeded. Please try again in 4.5s.",
         code="rate_limit_exceeded",
     )
-    recovery = RateLimitRecovery(sleep=lambda s: sleeps.append(s) or None)
+    recovery = RateLimitRecovery(
+        sleep=lambda s: sleeps.append(s) or None, player=Player()
+    )
     await recovery.recover(session, error=err, state=state)
 
     assert sleeps
     assert sleeps[0] >= 4.5
-    assert any("Tuesday" in line or "10:00" in line for line in said)
-    assert any("Mohit" in line for line in said)
-    session.generate_reply.assert_not_called()
+    assert said
+    session.generate_reply.assert_called()
+    spoken = " ".join(
+        str(call.kwargs.get("instructions") or "")
+        for call in session.generate_reply.await_args_list
+    )
+    assert "Tuesday" in spoken or "10:00" in spoken
+    assert "Mohit" in spoken
 
 
 async def test_maybe_trim_calls_update_when_over_budget() -> None:

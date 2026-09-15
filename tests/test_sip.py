@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock
 
 from sip_utils import (
+    ani_from_participant,
     branch_from_did,
     branch_from_participant,
     normalize_au_phone,
@@ -80,3 +81,13 @@ def test_magicmock_participant_did_does_not_crash() -> None:
     assert branch_from_participant(participant) == "shellharbour"
     assert normalize_au_phone(MagicMock()) == ""
     assert normalize_au_phone(None) == ""
+
+
+def test_ani_is_caller_number_not_did() -> None:
+    participant = MagicMock()
+    participant.attributes = {
+        "sip.phoneNumber": "0412 334 556",
+        "sip.trunkPhoneNumber": "+61242169911",
+    }
+    participant.identity = "sip-abc"
+    assert ani_from_participant(participant) == "+61412334556"

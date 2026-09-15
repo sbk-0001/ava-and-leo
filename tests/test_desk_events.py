@@ -325,3 +325,4 @@ def test_grounding_violation_packet_is_typed() -> None:
     assert "grounding_violation" in DESK_EVENT_TYPES
     assert "transcript" in DESK_EVENT_TYPES
     assert "activity" in DESK_EVENT_TYPES
+    assert "dead_air" in DESK_EVENT_TYPES

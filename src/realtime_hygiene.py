@@ -174,8 +174,11 @@ def rate_limit_backoff_s(attempt: int, retry_after_s: float | None = None) -> fl
 class RateLimitRecovery:
     """Soft recovery: trim, cover ('just a sec'), backoff, then retry."""
 
-    def __init__(self, *, sleep: SleepFn | None = None) -> None:
+    def __init__(
+        self, *, sleep: SleepFn | None = None, player: Any | None = None
+    ) -> None:
         self._sleep_fn = sleep
+        self._player = player
         self._task: asyncio.Task[None] | None = None
         self.attempts = 0
 
@@ -205,27 +208,19 @@ class RateLimitRecovery:
             return state.pick_phrase(name, pool)
         return pool[0]
 
-    async def _say(self, session: Any, text: str) -> None:
-        """Predetermined cover/offer via say() — generate_reply burns TPM."""
-        say = getattr(session, "say", None)
-        if callable(say):
-            try:
-                result = say(text, allow_interruptions=True)
+    async def _play_cover(self, session: Any, text: str) -> None:
+        """Predetermined cover from the filler bank — never generate_reply."""
+        player = self._player or getattr(session, "_filler_player", None)
+        if player is not None:
+            play = getattr(player, "play", None)
+            if callable(play):
+                result = play(text)
                 if inspect.isawaitable(result):
                     await result
                 return
-            except TypeError:
-                result = say(text)
-                if inspect.isawaitable(result):
-                    await result
-                return
-            except Exception:
-                logger.exception("rate-limit session.say failed; trying generate_reply")
-        await session.generate_reply(
-            instructions=(
-                "Cover the pause. Say exactly this and nothing else, "
-                f"in character: {text} Do not invent a diary result."
-            )
+        logger.error(
+            "filler player missing for rate-limit cover; refusing model fallback text=%r",
+            text,
         )
 
     async def recover(
@@ -252,7 +247,7 @@ class RateLimitRecovery:
             except Exception:
                 logger.exception("rate-limit trim failed; CallState still intact")
         try:
-            await self._say(session, self._cover_line(state))
+            await self._play_cover(session, self._cover_line(state))
         except Exception:
             logger.exception("rate-limit cover speech failed")
         await self._sleep(delay)
@@ -261,7 +256,12 @@ class RateLimitRecovery:
             from booking import spoken_two_slot_offer
 
             try:
-                await self._say(session, spoken_two_slot_offer(slots))
+                await session.generate_reply(
+                    instructions=(
+                        "Offer these diary times in one short sentence, nothing else: "
+                        f"{spoken_two_slot_offer(slots)}"
+                    )
+                )
             except Exception:
                 logger.exception("rate-limit slot offer speech failed")
             return

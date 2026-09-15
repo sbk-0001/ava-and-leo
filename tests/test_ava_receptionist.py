@@ -51,6 +51,8 @@ def test_required_tools_are_present() -> None:
         "transfer_to_human",
         "end_call",
         "resolve_date_phrase",
+        "ask_for_field",
+        "verify_date_of_birth",
     ):
         assert f"async def {name}" in source, name
     assert "TransferSIPParticipantRequest" in source
@@ -423,26 +425,36 @@ class _FakeRealtimeSession:
 
 
 @pytest.mark.asyncio
-async def test_transcription_node_speaks_substitute_on_realtime_without_say(
+async def test_transcription_node_plays_recovery_from_bank(
     monkeypatch,
 ) -> None:
-    """Old path: session.say(spoken) raises, caller hears a fragment then silence.
-
-    Realtime-safe path: interrupt ungrounded audio, yield the substitute, and
-    generate_reply so the full safe sentence is audible.
-    Docs: https://docs.livekit.io/agents/models/realtime/#scripted-speech-output
-    """
+    """Ungrounded audio is interrupted; recovery is a bank clip, not generate_reply."""
     from livekit.agents import ModelSettings
 
     from booking import MemoryBookingProvider
     from call_state import CallState
-    from grounding import CONFIRM_SUBSTITUTE
+    from filler_player import FillerPlayer
+    from grounding import RECOVERY_DEFAULT
     from practice import PracticeClient
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    class Player(FillerPlayer):
+        def __init__(self) -> None:
+            self.played: list[str] = []
+            self.last_first_audio_ts = 0.0
+            self.session = None
+            self.ambient = None
+            self.on_audio = None
+
+        async def play(self, text: str, **_kwargs: object) -> None:
+            self.played.append(text)
+
+    player = Player()
     ava = AvaReceptionist(
         state=CallState(branch="shellharbour", today=date(2026, 9, 15)),
         booking=MemoryBookingProvider(PracticeClient(mode="mock")),
+        filler_player=player,
     )
     session = _FakeRealtimeSession()
     ava._speech_session = session
@@ -456,11 +468,10 @@ async def test_transcription_node_speaks_substitute_on_realtime_without_say(
     if ava._speech_tasks:
         await asyncio.gather(*ava._speech_tasks)
 
-    assert yielded == [CONFIRM_SUBSTITUTE]
+    assert yielded == [RECOVERY_DEFAULT]
     assert session.interrupts == 1
-    assert session.replies, "substitute must be spoken via generate_reply on Realtime"
-    instructions = str(session.replies[0].get("instructions") or "")
-    assert CONFIRM_SUBSTITUTE in instructions
+    assert session.replies == []
+    assert player.played
     assert "Maryam" not in "".join(yielded)
     assert "you're booked" not in "".join(yielded).lower()
     assert session.say_calls == []

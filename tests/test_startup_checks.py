@@ -63,3 +63,13 @@ def test_circuit_breaker_opens_after_repeated_429s() -> None:
     assert breaker.record_429() is True
     assert breaker.open is True
     assert breaker.overflow_number(env) == "+61242169911"
+
+
+def test_filler_bank_boot_assert_is_wired() -> None:
+    from startup_checks import assert_filler_audio_bank
+
+    assert_filler_audio_bank()
+    from filler_bank import FillerBankError, assert_filler_bank
+
+    assert callable(assert_filler_bank)
+    assert issubclass(FillerBankError, RuntimeError)

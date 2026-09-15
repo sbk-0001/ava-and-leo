@@ -17,13 +17,19 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from booking import BookingProvider, parse_date_range
+from booking import (
+    BookingProvider,
+    invalid_slot_id_result,
+    is_canonical_slot_id,
+    parse_date_range,
+)
 from persona import BRANCHES
 
 logger = logging.getLogger("ava.cache")
 
 SYDNEY = ZoneInfo("Australia/Sydney")
 CACHE_WINDOW_DAYS = 14
+AGENT_SLOT_LIMIT = 12
 REFRESH_MIN_S = 120.0
 REFRESH_MAX_S = 180.0
 _SLOT_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
@@ -166,29 +172,32 @@ class CachedBookingProvider:
             await self.refresh_branch(branch)
             window = self._windows.get(branch)
         if window is not None and window.covers(start, end):
-            self.cache_hits += 1
             slots = window.slots_in_range(start, end)
-            return {
-                "ok": True,
-                "cached": True,
-                "cache_age_s": round(window.age_s(self.clock()), 3),
-                "cache_fetched_at": window.fetched_at_iso,
-                "branch_id": branch,
-                "appointment_type": appointment_type,
-                "date_from": start,
-                "date_to": end,
-                "slots": slots[:12],
-            }
+            if slots:
+                self.cache_hits += 1
+                return {
+                    "ok": True,
+                    "cached": True,
+                    "cache_age_s": round(window.age_s(self.clock()), 3),
+                    "cache_fetched_at": window.fetched_at_iso,
+                    "branch_id": branch,
+                    "appointment_type": appointment_type,
+                    "date_from": start,
+                    "date_to": end,
+                    "slots": slots[:AGENT_SLOT_LIMIT],
+                }
 
         self.live_checks += 1
         result = await self.inner.check_availability(
             branch=branch,
             appointment_type=appointment_type,
-            date_range=date_range,
+            date_range=f"{start}/{end}",
         )
         payload = dict(result)
         payload["cached"] = False
         payload["cache_age_s"] = None
+        if payload.get("ok"):
+            payload["slots"] = list(payload.get("slots") or [])[:AGENT_SLOT_LIMIT]
         return payload
 
     def _lookup_slot(self, slot_id: str) -> Any | None:
@@ -232,6 +241,8 @@ class CachedBookingProvider:
         mobile: str | None = None,
         date_of_birth: str | None = None,
     ) -> dict[str, Any]:
+        if not is_canonical_slot_id(slot_id):
+            return invalid_slot_id_result(slot_id)
         day = date_from_slot_id(slot_id) or "this week"
         self.live_checks += 1
         self.reverifies += 1

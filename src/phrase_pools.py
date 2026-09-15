@@ -31,18 +31,22 @@ STAGE_3 = (
     "bear with me, diary's being slow",
 )
 
-# Stage 4 — ~6000ms conversational fill.
+# Stage 4 — ~6000ms conversational fill. Caller answers are a normal turn.
 STAGE_4 = (
     "still here, just waiting on the screen",
     "yeah it's being a bit of a shocker this morning",
     "won't be long, I can see it spinning",
     "hang on a tick, it's nearly there",
+    "sorry it's dragging — have you been to us before or are ya new?",
+    "while this loads, whereabouts are you coming from?",
 )
 
 # Stage 5 is a real take_message fallback, not only a line — but she still speaks.
 STAGE_5 = (
     "I'm not gonna sit here in silence — I'll take a message and get the team to ring you",
     "diary's stuck, so I'll leave a note for the team to call you back rather than guess a time",
+    "yeah nah, it's not playing today — I'll take a message and get them to ring you",
+    "this diary's stuck, so I'm gonna grab your number rather than sit in silence",
 )
 
 # ERROR path — 429 / timeout. Never invent availability.
@@ -50,6 +54,7 @@ STAGE_ERROR = (
     "this thing's having a sook — bear with me",
     "yeah the screen's not playing, hang on",
     "sorry, it's thrown a wobbly, two secs",
+    "ugh, the system's having a moment — two ticks",
 )
 
 # EMPTY / UNKNOWN path — do not say chockers.
@@ -57,6 +62,15 @@ STAGE_EMPTY = (
     "nup, not getting a clean look at that yet",
     "hmm, I'm not seeing a clear run of times",
     "yeah I don't wanna guess, let me stay on it",
+    "not a clean look at the diary yet — stay with me",
+)
+
+# Grounding recovery — pre-rendered; never voiced via the model.
+RECOVERY = (
+    "sorry — hang on, lemme just double check…",
+    "ah, hang on, let me make sure I've got that right",
+    "just a sec, I wanna make sure I've got that right",
+    "hang on, let me double-check that before I say it",
 )
 
 STAGE_POOLS: dict[int, tuple[str, ...]] = {
@@ -123,6 +137,7 @@ STOCK_POOLS: dict[str, tuple[str, ...]] = {
     "stage_5": STAGE_5,
     "stage_error": STAGE_ERROR,
     "stage_empty": STAGE_EMPTY,
+    "recovery": RECOVERY,
     "ack": ACKS,
     "opening": OPENINGS,
     "closing": CLOSINGS,

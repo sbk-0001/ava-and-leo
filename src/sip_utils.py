@@ -77,6 +77,21 @@ def branch_from_did(
     return default
 
 
+def ani_from_participant(participant: rtc.RemoteParticipant | None) -> str:
+    """Caller ANI as E.164. sip.phoneNumber is the calling party, not the DID."""
+    if participant is None:
+        return ""
+    attributes = getattr(participant, "attributes", None) or {}
+    for key in ("sip.phoneNumber", "sip.from", "sip.callerNumber"):
+        raw = attributes.get(key) if hasattr(attributes, "get") else None
+        if isinstance(raw, str) and raw.strip():
+            return normalize_au_phone(raw)
+    identity = getattr(participant, "identity", None)
+    if isinstance(identity, str) and any(ch.isdigit() for ch in identity):
+        return normalize_au_phone(identity)
+    return ""
+
+
 def branch_from_participant(
     participant: rtc.RemoteParticipant | None,
     mapping: dict[str, str] | None = None,

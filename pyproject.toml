@@ -40,6 +40,9 @@ where = ["src"]
 [tool.setuptools.package-dir]
 "" = "src"
 
+[tool.setuptools.package-data]
+"*" = ["audio/fillers/*.json", "audio/fillers/*.md", "audio/fillers/**/*.wav"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
@@ -54,7 +57,7 @@ select = ["E", "F", "W", "I", "N", "B", "A", "C4", "UP", "SIM", "RUF"]
 ignore = ["E501"]  # Line too long (handled by formatter)
 
 [tool.ruff.lint.isort]
-known-first-party = ["agent", "ambient", "availability_cache", "ava_receptionist", "backchannel", "booking", "booking_state", "call_log", "call_state", "date_context", "demo_harness", "desk_events", "filler_ladder", "grounding", "make_call", "never_silent_harness", "never_silent_recorder", "persona", "phrase_pools", "portal", "practice", "realtime_hygiene", "run_local", "sip_utils", "startup_checks"]
+known-first-party = ["agent", "ambient", "availability_cache", "ava_receptionist", "backchannel", "booking", "booking_state", "call_log", "call_state", "caller_store", "date_context", "dead_air", "demo_harness", "desk_events", "filler_bank", "filler_ladder", "filler_player", "grounding", "make_call", "never_silent_harness", "never_silent_recorder", "persona", "phrase_pools", "portal", "practice", "realtime_hygiene", "run_local", "sip_utils", "startup_checks"]
 
 [tool.ruff.format]
 quote-style = "double"

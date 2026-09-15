@@ -57,6 +57,31 @@ def test_slot_times_and_dentist_are_speakable() -> None:
     assert facts.dentist_display_name == "Dr Mohit Tolani"
 
 
+def test_confirm_intent_is_not_a_completed_booking() -> None:
+    from grounding import (
+        GATE_BLOCK_UTTERANCES,
+        GATE_PASS_UTTERANCES,
+        SpeakableFacts,
+        gate_utterance,
+    )
+
+    facts = SpeakableFacts()
+    assert len(GATE_BLOCK_UTTERANCES) == 20
+    assert len(GATE_PASS_UTTERANCES) == 20
+    for line in GATE_BLOCK_UTTERANCES:
+        gated = gate_utterance(line, facts)
+        assert gated.suppressed is True, line
+        assert "confirm" in gated.violations or gated.recovery, line
+        assert gated.recovery is True
+        assert gated.spoken != line
+    for line in GATE_PASS_UTTERANCES:
+        gated = gate_utterance(line, facts)
+        assert gated.suppressed is False, (line, gated.violations, gated.spoken)
+        assert gated.spoken == line
+    locked_in = gate_utterance("let me lock that in for ya", facts)
+    assert locked_in.suppressed is False
+
+
 def test_confirm_language_blocked_until_book_confirmed() -> None:
     facts = SpeakableFacts()
     gated = gate_utterance("Beautiful, you're all set for Wednesday.", facts)
@@ -153,8 +178,10 @@ def test_dentist_display_name_is_pinned_from_slot() -> None:
 
 
 @pytest.mark.asyncio
-async def test_realtime_transcription_yields_substitute_not_ungrounded() -> None:
-    """Captions become the safe line; original confirm/time text is not yielded."""
+async def test_realtime_transcription_yields_recovery_not_ungrounded() -> None:
+    """Captions become the recovery line; original confirm text is not yielded."""
+    from grounding import RECOVERY_DEFAULT
+
     facts = SpeakableFacts()
     committed: list[str] = []
     rewrites: list[str] = []
@@ -173,7 +200,7 @@ async def test_realtime_transcription_yields_substitute_not_ungrounded() -> None
     ):
         yielded = chunk
 
-    assert yielded == CONFIRM_SUBSTITUTE
+    assert yielded == RECOVERY_DEFAULT
     assert "Maryam" not in yielded
-    assert rewrites == [CONFIRM_SUBSTITUTE]
+    assert rewrites == [RECOVERY_DEFAULT]
     assert committed[0] == "You're all set, "

@@ -245,6 +245,16 @@ class CallState:
     barge_in_pending: bool = False
     last_barge_in_resume: str | None = None
     phrase_rng: random.Random = field(default_factory=random.Random)
+    known_caller: bool = False
+    ani: str | None = None
+    channel: str = "unknown"
+    dob_verified: bool = False
+    dob_failed: bool = False
+    preferred_branch: str | None = None
+    usual_dentist: str | None = None
+    last_appointment_private: dict[str, Any] | None = None
+    pms_record: dict[str, Any] | None = None
+    pending_grounding_note: str | None = None
 
     def __post_init__(self) -> None:
         self.date_context = refresh_date_context(today=self.today)
@@ -310,7 +320,152 @@ class CallState:
         gated = gate_utterance(text, self.speakable)
         if gated.suppressed:
             self.grounding_violations += 1
+            from grounding import grounding_corrective_note
+
+            self.pending_grounding_note = grounding_corrective_note(
+                gated.original, gated.violations
+            )
         return gated
+
+    def known_value(self, field: str) -> str | None:
+        key = (field or "").strip().lower()
+        if key in {"mobile", "phone", "number"}:
+            return self.caller_mobile
+        if key in {"name", "caller_name"}:
+            return self.caller_name
+        if key in {"branch"}:
+            return self.branch
+        if key in {"dob", "date_of_birth"}:
+            return "verified" if self.dob_verified else None
+        return None
+
+    def ask_for(self, field: str) -> dict[str, Any]:
+        """Hard-reject a re-ask when the field is already populated."""
+        known = self.known_value(field)
+        if known:
+            return {
+                "ok": False,
+                "already_known": True,
+                "field": field,
+                "value": known,
+                "note": f"already known: {known}",
+            }
+        result = self.record_ask(field)
+        return {
+            "ok": True,
+            "already_known": False,
+            "field": field,
+            "attempts": result.count,
+            "stop_asking": result.stop_asking,
+            "note": "Ask once, then store the answer. Do not ask again if they give it.",
+        }
+
+    def known_facts_block(self) -> str:
+        """Compact facts injected every turn. Clinical detail is redacted until DOB."""
+        mobile = self.caller_mobile or "unknown"
+        name = self.caller_name or "unknown"
+        dentist = (
+            self.preferred_clinician or self.usual_dentist
+            if self.dob_verified
+            else "(redacted until DOB verified)"
+        )
+        last_appt = "none"
+        if self.dob_verified and self.last_appointment_private:
+            last = self.last_appointment_private
+            last_appt = (
+                f"{last.get('date') or ''} {last.get('time') or ''}".strip()
+                or "on file"
+            )
+        elif self.last_appointment_private or (self.pms_record or {}).get("bookings"):
+            last_appt = "(redacted until DOB verified)"
+        patient_status = (
+            str(self.is_existing_patient)
+            if self.dob_verified
+            else "unverified — do not confirm or deny"
+        )
+        return (
+            "KNOWN FACTS (already collected — never ask again):\n"
+            f"- first_name: {self.caller_first_name or 'unknown'}\n"
+            f"- caller_name: {name}\n"
+            f"- caller_mobile: {mobile}\n"
+            f"- known_caller: {self.known_caller}\n"
+            f"- ani: {self.ani or 'none'}\n"
+            f"- dob_verified: {self.dob_verified}\n"
+            f"- is_existing_patient: {patient_status}\n"
+            f"- preferred_branch: {self.preferred_branch or self.branch}\n"
+            f"- usual_dentist: {dentist}\n"
+            f"- last_appointment: {last_appt}\n"
+            "- If caller_mobile is set: do not ask for their number. "
+            "You may light-confirm 'Is this still the best number for ya?'\n"
+            "- New booking: no DOB required. Discuss/move/cancel existing: DOB required.\n"
+            "- Do not volunteer existing appointment, dentist, or treatment detail "
+            "until dob_verified is true.\n"
+            "- Failed DOB: offer a callback. Do not mention date of birth. "
+            "Do not confirm or deny a record."
+        )
+
+    @property
+    def caller_first_name(self) -> str | None:
+        if not self.caller_name:
+            return None
+        token = self.caller_name.strip().split()[0]
+        return token or None
+
+    def may_disclose_existing(self) -> bool:
+        return self.dob_verified and not self.dob_failed
+
+    def require_dob_for_existing(self) -> dict[str, Any]:
+        if self.may_disclose_existing():
+            return {"ok": True, "verified": True}
+        if self.dob_failed:
+            return {
+                "ok": False,
+                "reason": "verification_failed",
+                "note": (
+                    "Offer to have the team call back. Do not mention date of birth. "
+                    "Do not confirm or deny a record."
+                ),
+            }
+        return {
+            "ok": False,
+            "reason": "dob_required",
+            "note": (
+                "Need date of birth before discussing, moving, or cancelling an "
+                "existing appointment. Ask once for DOB. Do not mention any "
+                "existing booking details."
+            ),
+        }
+
+    def verify_dob(self, given: str | None) -> dict[str, Any]:
+        expected = ""
+        record = self.pms_record or {}
+        patients = (
+            record.get("patients") if isinstance(record.get("patients"), list) else []
+        )
+        if patients and isinstance(patients[0], dict):
+            expected = str(patients[0].get("date_of_birth") or "")
+        given_n = re.sub(r"[^0-9]", "", given or "")
+        expected_n = re.sub(r"[^0-9]", "", expected)
+        if expected_n and given_n and given_n == expected_n:
+            self.dob_verified = True
+            self.dob_failed = False
+            if record.get("is_existing_patient"):
+                self.is_existing_patient = True
+            return {
+                "ok": True,
+                "verified": True,
+                "note": "Identity verified for this call.",
+            }
+        self.dob_failed = True
+        self.dob_verified = False
+        return {
+            "ok": False,
+            "reason": "verification_failed",
+            "note": (
+                "Offer to have the team call back. Do not mention date of birth. "
+                "Do not confirm or deny a record."
+            ),
+        }
 
     def may_confirm_booking(self) -> bool:
         return booking_is_locked(self.last_book_result) or (
@@ -344,6 +499,18 @@ class CallState:
 
     def register_mobile(self, raw: str | None) -> dict[str, Any]:
         """Store a valid mobile, or increment the hard ask counter."""
+        if (
+            self.caller_mobile
+            and is_valid_au_mobile(self.caller_mobile)
+            and (not raw or is_valid_au_mobile(raw))
+        ):
+            return {
+                "ok": True,
+                "already_known": True,
+                "mobile": self.caller_mobile,
+                "stored": True,
+                "note": f"already known: {self.caller_mobile}",
+            }
         if self.should_stop_asking("mobile"):
             offer_callback = self.may_offer_callback()
             return {
@@ -478,6 +645,7 @@ class CallState:
         )
         return (
             "CALL STATE (enforced in code — do not contradict, do not ask which branch):\n"
+            f"{self.known_facts_block()}\n"
             f"- branch: {self.branch_name} (id {self.branch}). They rang this number.\n"
             f"- caller_name: {self.caller_name or 'unknown'}\n"
             f"- caller_mobile: {self.caller_mobile or 'unknown'}\n"
@@ -521,6 +689,7 @@ class CallState:
             "Find a slot or transfer.\n"
             "- If offered_branch is set: offer that clinic warmly. Never a menu.\n"
             "- If stop_asking_mobile: do not ask for the mobile again.\n"
+            "- If caller_mobile is already known: never ask for it again.\n"
             "- If barge_in_resume is set: start with that phrase. Never restart the "
             "cut-off sentence.\n"
             "- If last_offer_slots is none: do not name any clock time or diary "

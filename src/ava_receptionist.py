@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import logging
 import os
@@ -28,12 +29,19 @@ from booking import (
 )
 from call_log import CallLog
 from call_state import CallState
+from caller_store import CallerStore, get_shared_caller_store, upsert_from_booking
 from date_context import resolve_date_phrase as resolve_date_phrase_fn
+from dead_air import DeadAirMonitor
 from desk_events import activity_packet_from_result, schedule_desk_publish
 from filler_ladder import FillerLadder, SessionSpeaker, speak_scripted
-from grounding import grounded_realtime_transcription, grounding_violation_packet
+from filler_player import FillerPlayer
+from grounding import (
+    grounded_realtime_transcription,
+    grounding_corrective_note,
+    grounding_violation_packet,
+)
 from persona import ava_instructions, get_branch, quote_fee, resolve_tool_branch
-from phrase_pools import STAGE_1
+from phrase_pools import RECOVERY, STAGE_1
 from realtime_hygiene import maybe_trim_realtime_context
 from sip_utils import find_sip_participant
 
@@ -133,6 +141,9 @@ class AvaReceptionist(Agent):
         call_log: CallLog | None = None,
         ambient: Any | None = None,
         on_desk_event: DeskNotify | None = None,
+        caller_store: CallerStore | None = None,
+        filler_player: FillerPlayer | None = None,
+        dead_air: DeadAirMonitor | None = None,
     ) -> None:
         self.state = state
         self.booking = booking
@@ -140,11 +151,17 @@ class AvaReceptionist(Agent):
         self.call_log = call_log
         self.ambient = ambient
         self.on_desk_event = on_desk_event
+        self.caller_store = (
+            caller_store if caller_store is not None else get_shared_caller_store()
+        )
         self._desk_tasks: set[asyncio.Task[Any]] = set()
         self._speech_tasks: set[asyncio.Task[Any]] = set()
         self._active_ladder: FillerLadder | None = None
         self._scripted_speech = False
         self._speech_session: Any | None = None
+        self.filler_player = filler_player or FillerPlayer(ambient=ambient)
+        self.dead_air = dead_air or DeadAirMonitor(branch=state.branch)
+        self.filler_player.on_audio = self.dead_air.note_audio
         self.branch = get_branch(state.branch)
         super().__init__(
             instructions=ava_instructions(self.branch.id, state.prompt_block()),
@@ -224,6 +241,7 @@ class AvaReceptionist(Agent):
                     task.add_done_callback(self._desk_tasks.discard)
             else:
                 schedule_desk_publish(self._job_room(), packet)
+            self._kick_recovery(gated.original, gated.violations)
         return gated.spoken
 
     def _voice_session(self) -> Any:
@@ -239,18 +257,14 @@ class AvaReceptionist(Agent):
                 interrupt()
             except Exception:
                 logger.exception("grounding interrupt failed")
-        self._kick_substitute_speech(spoken)
+        # Recovery is kicked from _gate_speech via commit(); captions use spoken.
 
-    def _kick_substitute_speech(self, spoken: str) -> None:
-        """Speak a grounding substitute without blocking transcription_node.
-
-        generate_reply must not be awaited inside the transcription pipeline
-        (re-entrancy). OpenAI Realtime has no session.say().
-        Docs: https://docs.livekit.io/agents/models/realtime/#scripted-speech-output
-        """
+    def _kick_recovery(self, original: str, kinds: list[str]) -> None:
+        """Play a bank recovery clip. Never generate_reply a substitute sentence."""
         if self._scripted_speech:
             return
         self._scripted_speech = True
+        line = self.state.pick_phrase("recovery", RECOVERY)
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -259,15 +273,30 @@ class AvaReceptionist(Agent):
 
         async def _run() -> None:
             try:
-                await speak_scripted(self._voice_session(), spoken, kind="script")
+                self.filler_player.session = self._voice_session()
+                await self.filler_player.play(line)
+                note = grounding_corrective_note(original, kinds)
+                self.state.pending_grounding_note = note
+                try:
+                    await self.update_instructions(
+                        ava_instructions(
+                            self.state.branch,
+                            self.state.prompt_block() + "\n" + note,
+                        )
+                    )
+                except Exception:
+                    logger.exception("grounding corrective note failed")
             except Exception:
-                logger.exception("grounding substitute speech failed")
+                logger.exception("grounding recovery clip failed")
             finally:
                 self._scripted_speech = False
 
         task = loop.create_task(_run())
         self._speech_tasks.add(task)
         task.add_done_callback(self._speech_tasks.discard)
+
+    def _kick_substitute_speech(self, spoken: str) -> None:
+        self._kick_recovery(spoken, ["confirm"])
 
     async def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
@@ -286,14 +315,13 @@ class AvaReceptionist(Agent):
     async def transcription_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> AsyncIterable[str]:
-        """Rewrite Realtime captions; interrupt ungrounded audio; generate_reply.
+        """Rewrite Realtime captions; interrupt ungrounded audio; play bank recovery.
 
-        Yielding the substitute updates the published transcript. OpenAI
-        Realtime audio is S2S, so session.say() cannot speak it — use
-        generate_reply after interrupt.
+        Yielding the recovery caption updates the published transcript. OpenAI
+        Realtime audio is S2S — do not generate_reply a substitute sentence.
 
         Docs: https://docs.livekit.io/agents/logic/nodes/
-              https://docs.livekit.io/agents/models/realtime/#scripted-speech-output
+              https://docs.livekit.io/agents/multimodality/audio/background-audio.md
         """
         del model_settings
         if self._scripted_speech:
@@ -311,7 +339,7 @@ class AvaReceptionist(Agent):
     async def _cover(self, context: RunContext) -> None:
         """Stage-1 filler only. Prefer _dispatch_with_ladder so audio precedes the network."""
         try:
-            speaker = SessionSpeaker(context.session, gate=self._gate_speech)
+            speaker = SessionSpeaker(context.session, player=self.filler_player)
             line = self.state.pick_phrase("stage_1", STAGE_1)
             await speaker.utter(line)
         except Exception:
@@ -321,11 +349,24 @@ class AvaReceptionist(Agent):
         self,
         context: RunContext,
         factory: Any,
+        *,
+        in_flight: str = "tool",
     ) -> dict[str, Any]:
         """Speak stage-1 audio, then run the tool. Ladder covers the wait."""
-        speaker = SessionSpeaker(context.session, gate=self._gate_speech)
+        self.filler_player.session = context.session
+        self.filler_player.ambient = self.ambient
+        speaker = SessionSpeaker(context.session, player=self.filler_player)
         ladder = FillerLadder(self.state, speaker=speaker, booking=self.booking)
         self._active_ladder = ladder
+        self.dead_air.room = self._job_room()
+        self.dead_air.set_in_flight(in_flight, pending=True)
+
+        async def _watch_dead_air() -> None:
+            while True:
+                await asyncio.sleep(0.1)
+                self.dead_air.check()
+
+        watcher = asyncio.create_task(_watch_dead_air(), name="ava-dead-air")
         if self.ambient is not None:
             try:
                 self.ambient.play_keyboard()
@@ -333,6 +374,7 @@ class AvaReceptionist(Agent):
                 logger.exception("keyboard clatter failed")
         try:
             result, trace = await ladder.dispatch(factory)
+            self.dead_air.check()
             logger.info(
                 "first-audio-ts=%s tool-dispatch-ts=%s audio_before_dispatch=%s",
                 trace.first_audio_ts,
@@ -341,7 +383,11 @@ class AvaReceptionist(Agent):
             )
             return dict(result)
         finally:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await watcher
             self._active_ladder = None
+            self.dead_air.set_in_flight(None, pending=False)
             if self.ambient is not None:
                 try:
                     self.ambient.stop_keyboard()
@@ -456,7 +502,9 @@ class AvaReceptionist(Agent):
             return
         try:
             await self.session.generate_reply(
-                instructions=inbound_greeting_instructions(self.state.branch)
+                instructions=inbound_greeting_instructions(
+                    self.state.branch, state=self.state
+                )
             )
         except Exception:
             logger.exception("session-start greeting failed")
@@ -642,8 +690,15 @@ class AvaReceptionist(Agent):
             return booked
 
         result = self.state.record_book_result(
-            await self._dispatch_with_ladder(context, _run)
+            await self._dispatch_with_ladder(
+                context, _run, in_flight="book_appointment"
+            )
         )
+        if result.get("ok") and result.get("confirmed"):
+            try:
+                upsert_from_booking(self.caller_store, self.state, result)
+            except Exception:
+                logger.exception("caller store write failed")
         self._log_tool(
             "book_appointment",
             result,
@@ -674,6 +729,9 @@ class AvaReceptionist(Agent):
 
         async def _run() -> dict[str, Any]:
             self.state.intent = "reschedule"
+            gated = self.state.require_dob_for_existing()
+            if not gated.get("ok"):
+                return gated
             moved = await self.booking.reschedule_appointment(
                 booking_id=booking_id, new_slot_id=new_slot_id
             )
@@ -703,6 +761,9 @@ class AvaReceptionist(Agent):
 
         async def _run() -> dict[str, Any]:
             self.state.intent = "cancel"
+            gated = self.state.require_dob_for_existing()
+            if not gated.get("ok"):
+                return gated
             cancelled = await self.booking.cancel_appointment(booking_id=booking_id)
             if cancelled.get("fee_applies"):
                 cancelled["say"] = (
@@ -730,17 +791,62 @@ class AvaReceptionist(Agent):
             looked = await self.booking.lookup_patient(
                 mobile=self.state.caller_mobile or mobile
             )
+            self.state.pms_record = looked if isinstance(looked, dict) else None
             if looked.get("is_existing_patient"):
-                self.state.is_existing_patient = True
                 patients = looked.get("patients") or []
                 if patients and not self.state.caller_name:
                     self.state.caller_name = patients[0].get("name")
+            public = dict(looked)
+            if not self.state.dob_verified:
+                public["is_existing_patient"] = None
+                public["patients"] = []
+                public["bookings"] = []
+                public["identity_verified"] = False
+                public["note"] = (
+                    "Do not confirm or deny that they are a patient. "
+                    "Do not mention existing appointments. "
+                    "A new booking does not need date of birth."
+                )
+            elif looked.get("is_existing_patient"):
+                self.state.is_existing_patient = True
             elif looked.get("ok"):
                 self.state.is_existing_patient = False
-            return looked
+            return public
 
         result = await self._dispatch_with_ladder(context, _run)
         self._log_tool("lookup_patient", result, {"mobile": mobile})
+        return result
+
+    @function_tool()
+    async def ask_for_field(self, context: RunContext, field: str) -> dict[str, Any]:
+        """Ask the caller for a field only if it is not already known.
+
+        Hard-rejects a re-ask. If the field is populated, returns
+        already known: <value> and you must not ask again.
+
+        Args:
+            field: mobile, name, or date_of_birth.
+        """
+        del context
+        result = self.state.ask_for(field)
+        self._log_tool("ask_for_field", result, {"field": field})
+        return result
+
+    @function_tool()
+    async def verify_date_of_birth(
+        self, context: RunContext, date_of_birth: str
+    ) -> dict[str, Any]:
+        """Verify DOB before discussing, moving, or cancelling an existing appointment.
+
+        New bookings do not need this. Failed verification: offer a callback.
+        Do not mention date of birth. Do not confirm or deny a record.
+
+        Args:
+            date_of_birth: Date of birth as spoken, preferably YYYY-MM-DD.
+        """
+        del context
+        result = self.state.verify_dob(date_of_birth)
+        self._log_tool("verify_date_of_birth", result, {"date_of_birth": "given"})
         return result
 
     @function_tool()
@@ -888,9 +994,22 @@ class AvaReceptionist(Agent):
         return result
 
 
-def inbound_greeting_instructions(branch_id: str) -> str:
+def inbound_greeting_instructions(
+    branch_id: str, *, state: CallState | None = None
+) -> str:
     branch = get_branch(branch_id)
     name = branch.trading_name
+    if state is not None and state.known_caller and state.caller_first_name:
+        first = state.caller_first_name
+        return (
+            f"Known caller. Sound warm. Answer as {name}. "
+            f"Greet {first} by first name. Do not ask for their number. "
+            "You may light-confirm: 'Is this still the best number for ya?' "
+            "Do not mention existing appointments, dentist, or treatment "
+            "until date of birth is verified on this call. "
+            "Never confirm or deny that they are a patient. "
+            "One warm short sentence, then stop and listen. Do not say G'day."
+        )
     return (
         "Sound warm and human, like a real receptionist picking up — not a script. "
         f"Answer as {name}. They rang this branch; you already know. "

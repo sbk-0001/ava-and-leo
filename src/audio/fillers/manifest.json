@@ -1,0 +1,204 @@
+{
+  "voice": "marin",
+  "speed": 0.9,
+  "sample_rate": 48000,
+  "source": "synthetic-placeholder",
+  "pools": {
+    "stage_1": [
+      {
+        "text": "righto, let's have a look for ya",
+        "file": "stage_1/righto-let-s-have-a-look-for-ya.wav",
+        "sha256": "4215638ccf5bf25d6b9d90910a057226e5205392ec317e79c6e92ba2f29cf4ef"
+      },
+      {
+        "text": "let me just have a look for ya",
+        "file": "stage_1/let-me-just-have-a-look-for-ya.wav",
+        "sha256": "b6101c68990ed37427902014bf569337ba7a4c158b15c3df620a101f2990bba3"
+      },
+      {
+        "text": "righto, pulling up the diary",
+        "file": "stage_1/righto-pulling-up-the-diary.wav",
+        "sha256": "4a98aaecc08f7b5b602200baff43becc8a0bfdcfbd7204fc6d3863f68c2f08a1"
+      },
+      {
+        "text": "two ticks, I'll pull that up",
+        "file": "stage_1/two-ticks-i-ll-pull-that-up.wav",
+        "sha256": "d035a79b75bca8ecf335c3fc44d578fb15ed7123d35d134f230bb379705aae83"
+      },
+      {
+        "text": "won't be a sec \u2014 let me have a squiz",
+        "file": "stage_1/won-t-be-a-sec-let-me-have-a-squiz.wav",
+        "sha256": "48cf3df8aa6bf069938044b047b712615978c33966601e29fc5be5f4761fbdde"
+      }
+    ],
+    "stage_2": [
+      {
+        "text": "doo doo doo",
+        "file": "stage_2/doo-doo-doo.wav",
+        "sha256": "84828413d8663587522c156ecf9429b2c09f3735faafbfa5b782783fc20bc53c"
+      },
+      {
+        "text": "dum de dum",
+        "file": "stage_2/dum-de-dum.wav",
+        "sha256": "2e62de0fe6b549c749c08d80e9f7585bd773b286633ce8837fa68de3858b53e6"
+      },
+      {
+        "text": "nup... nup... hang on",
+        "file": "stage_2/nup-nup-hang-on.wav",
+        "sha256": "0aea83b93c5712699f92673a0892cdea6fc5f2086af38c72048cdfdf98a6e13b"
+      },
+      {
+        "text": "mm, c'moooon, load",
+        "file": "stage_2/mm-c-moooon-load.wav",
+        "sha256": "c7c5c0377b4daa043cccea6266c2f9cfa5c30b272e4535b777c7907e66264946"
+      },
+      {
+        "text": "right, where are ya...",
+        "file": "stage_2/right-where-are-ya.wav",
+        "sha256": "0a443fbe0a329c227136f6d1fbba778444f4e37d822232732bb596309dda2363"
+      }
+    ],
+    "stage_3": [
+      {
+        "text": "bear with me, it's having a think about it",
+        "file": "stage_3/bear-with-me-it-s-having-a-think-about-it.wav",
+        "sha256": "e28b205d6bec12aa7c13e4658f6f71eb771edced3325418ad947c749d63adb36"
+      },
+      {
+        "text": "sorry, this booking system's older than I am",
+        "file": "stage_3/sorry-this-booking-system-s-older-than-i-am.wav",
+        "sha256": "9b41981aa30e2e3851536c6d4693b5d687365434cb0d5f12a6979a736c061dfd"
+      },
+      {
+        "text": "it's having a bit of a think \u2014 hang on a tick",
+        "file": "stage_3/it-s-having-a-bit-of-a-think-hang-on-a-tick.wav",
+        "sha256": "d416a054cb02368e6e5c7412d0c608deb1975e2dea4558086f7a016bb9d0e9f1"
+      },
+      {
+        "text": "bear with me, diary's being slow",
+        "file": "stage_3/bear-with-me-diary-s-being-slow.wav",
+        "sha256": "f006a7af00f0086059237d7007522af27bbc1568a8df9d6a41fb5f4bb64d4f2e"
+      }
+    ],
+    "stage_4": [
+      {
+        "text": "still here, just waiting on the screen",
+        "file": "stage_4/still-here-just-waiting-on-the-screen.wav",
+        "sha256": "8aca317553af5dcd76762a55d6a37a3bcd2f9052a71182cf2f4e0fa8a0949cd6"
+      },
+      {
+        "text": "yeah it's being a bit of a shocker this morning",
+        "file": "stage_4/yeah-it-s-being-a-bit-of-a-shocker-this-morning.wav",
+        "sha256": "46c30b5a67f9acc0132ed15851e2b3053b6780b4b3c42a3cecd28f01b625fe1c"
+      },
+      {
+        "text": "won't be long, I can see it spinning",
+        "file": "stage_4/won-t-be-long-i-can-see-it-spinning.wav",
+        "sha256": "6e34c5bea16a4a442704037da2d370fc48566086fa1d7957c2f096b32982f732"
+      },
+      {
+        "text": "hang on a tick, it's nearly there",
+        "file": "stage_4/hang-on-a-tick-it-s-nearly-there.wav",
+        "sha256": "de4c4266bac98474106a40be65ef4bc8d8e17b8d1417089228dba586287a4b24"
+      },
+      {
+        "text": "sorry it's dragging \u2014 have you been to us before or are ya new?",
+        "file": "stage_4/sorry-it-s-dragging-have-you-been-to-us-before-or-are-ya-new.wav",
+        "sha256": "20e0a4690168ce35a303b40b231e7ebc2e23db9bc96ae84d5538a7b80229f87c"
+      },
+      {
+        "text": "while this loads, whereabouts are you coming from?",
+        "file": "stage_4/while-this-loads-whereabouts-are-you-coming-from.wav",
+        "sha256": "60396e90525a35533d8e337bcdcfc645dd638274dfaf6b700d2ac34bcd06d2cd"
+      }
+    ],
+    "stage_5": [
+      {
+        "text": "I'm not gonna sit here in silence \u2014 I'll take a message and get the team to ring you",
+        "file": "stage_5/i-m-not-gonna-sit-here-in-silence-i-ll-take-a-message-and-get-the-team-t.wav",
+        "sha256": "7550d4fed97dbc08f068b64509a655512de052e42422891b3365e2a385be53c4"
+      },
+      {
+        "text": "diary's stuck, so I'll leave a note for the team to call you back rather than guess a time",
+        "file": "stage_5/diary-s-stuck-so-i-ll-leave-a-note-for-the-team-to-call-you-back-rather-.wav",
+        "sha256": "c813c73a1406f90e7192b73041dc2bd71c473b41f4ea9956907d2f60ccd180ba"
+      },
+      {
+        "text": "yeah nah, it's not playing today \u2014 I'll take a message and get them to ring you",
+        "file": "stage_5/yeah-nah-it-s-not-playing-today-i-ll-take-a-message-and-get-them-to-ring.wav",
+        "sha256": "4e4140561e7f4b4b4f7a6db29c39236c5a778b16bbd5976ce82a6dde13c22344"
+      },
+      {
+        "text": "this diary's stuck, so I'm gonna grab your number rather than sit in silence",
+        "file": "stage_5/this-diary-s-stuck-so-i-m-gonna-grab-your-number-rather-than-sit-in-sile.wav",
+        "sha256": "ef843fe452d968dbc25fdfa37fd670a31080d6969d5502ea43135b9600091697"
+      }
+    ],
+    "stage_error": [
+      {
+        "text": "this thing's having a sook \u2014 bear with me",
+        "file": "stage_error/this-thing-s-having-a-sook-bear-with-me.wav",
+        "sha256": "d0daad61fd9758a5a0ae229d9f2a6b01b890d903b76676641f10d239faf75e88"
+      },
+      {
+        "text": "yeah the screen's not playing, hang on",
+        "file": "stage_error/yeah-the-screen-s-not-playing-hang-on.wav",
+        "sha256": "fe4dee9f885d799fccd6c28776d3d599922b43f4b28b334f54b7e9e36068183f"
+      },
+      {
+        "text": "sorry, it's thrown a wobbly, two secs",
+        "file": "stage_error/sorry-it-s-thrown-a-wobbly-two-secs.wav",
+        "sha256": "cc22e014ae791e4fa5b7831b762b5a9940ac3d9d9882e6b584a922de313cdad4"
+      },
+      {
+        "text": "ugh, the system's having a moment \u2014 two ticks",
+        "file": "stage_error/ugh-the-system-s-having-a-moment-two-ticks.wav",
+        "sha256": "d71c04189c83f63c2b18ef72055a1ddb652ddda486bec4d0de41a1d01f696b7b"
+      }
+    ],
+    "stage_empty": [
+      {
+        "text": "nup, not getting a clean look at that yet",
+        "file": "stage_empty/nup-not-getting-a-clean-look-at-that-yet.wav",
+        "sha256": "5079556860a34776929017fbd164eee98312d7ab5f9c7936251419447db70d0c"
+      },
+      {
+        "text": "hmm, I'm not seeing a clear run of times",
+        "file": "stage_empty/hmm-i-m-not-seeing-a-clear-run-of-times.wav",
+        "sha256": "49a2a8a4ecbd2b1113106d00f7b6fe19808488d559ec32f67e32e37bd8844046"
+      },
+      {
+        "text": "yeah I don't wanna guess, let me stay on it",
+        "file": "stage_empty/yeah-i-don-t-wanna-guess-let-me-stay-on-it.wav",
+        "sha256": "b8ed8fbbab5cb7c713e1531761c93b3f99184ac4c0c26ad9947216fd1a6893c9"
+      },
+      {
+        "text": "not a clean look at the diary yet \u2014 stay with me",
+        "file": "stage_empty/not-a-clean-look-at-the-diary-yet-stay-with-me.wav",
+        "sha256": "047fef34e80fd8de11362443f946551832299ca6449860bfba8cee8d14a9d46c"
+      }
+    ],
+    "recovery": [
+      {
+        "text": "sorry \u2014 hang on, lemme just double check\u2026",
+        "file": "recovery/sorry-hang-on-lemme-just-double-check.wav",
+        "sha256": "24de35647685c62856863787b5e3bc8ee7371a6b805b82c44cc12caab928f740"
+      },
+      {
+        "text": "ah, hang on, let me make sure I've got that right",
+        "file": "recovery/ah-hang-on-let-me-make-sure-i-ve-got-that-right.wav",
+        "sha256": "e4f04178d1f8d8bfb053421cb6848ea921c465dd6b27b24817b536e9ec97b473"
+      },
+      {
+        "text": "just a sec, I wanna make sure I've got that right",
+        "file": "recovery/just-a-sec-i-wanna-make-sure-i-ve-got-that-right.wav",
+        "sha256": "e0be3885de208fcc894fd58a9bc99c14f842296067912882816dacd6fe9bf930"
+      },
+      {
+        "text": "hang on, let me double-check that before I say it",
+        "file": "recovery/hang-on-let-me-double-check-that-before-i-say-it.wav",
+        "sha256": "b10a192d2a133257d0cfbe7080a35531c016dd37466139a78e24e540e73e4516"
+      }
+    ]
+  }
+}

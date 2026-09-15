@@ -327,10 +327,12 @@ async def test_scripted_speech_on_realtime_uses_generate_reply_not_say() -> None
 
 
 @pytest.mark.asyncio
-async def test_session_speaker_fillers_use_generate_reply_on_realtime() -> None:
+async def test_session_speaker_fillers_use_bank_not_generate_reply() -> None:
     from types import SimpleNamespace
 
+    from filler_bank import get_filler_bank
     from filler_ladder import SessionSpeaker
+    from filler_player import FillerPlayer
 
     replies: list[dict] = []
 
@@ -346,10 +348,14 @@ async def test_session_speaker_fillers_use_generate_reply_on_realtime() -> None:
         say=say,
         generate_reply=lambda **kwargs: replies.append(kwargs) or SimpleNamespace(),
     )
-    speaker = SessionSpeaker(session)
-    await speaker.utter("Just a sec.")
-    assert replies
-    assert "Just a sec." in str(replies[0].get("instructions") or "")
+    from phrase_pools import STAGE_1
+
+    player = FillerPlayer(get_filler_bank())
+    speaker = SessionSpeaker(session, player=player)
+    line = STAGE_1[0]
+    await speaker.utter(line)
+    assert replies == []
+    assert player.played == [line]
 
 
 @pytest.mark.asyncio

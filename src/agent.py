@@ -33,7 +33,13 @@ from backchannel import attach_backchannels
 from booking import apply_job_booking_overrides, get_shared_booking_provider
 from call_log import CallLog, iso, log_dir_from_env, supabase_turn_row
 from call_state import CallState, kill_switch_enabled
+from caller_store import (
+    apply_record_to_state,
+    get_shared_caller_store,
+)
+from dead_air import DeadAirMonitor
 from desk_events import schedule_desk_publish, transcript_packet
+from filler_player import FillerPlayer
 from persona import CANONICAL_PERSONAS, canonical_persona, get_branch, resolve_persona
 from realtime_hygiene import (
     RateLimitRecovery,
@@ -42,6 +48,7 @@ from realtime_hygiene import (
 )
 from sip_utils import (
     SIP_CALL_ERRORS,
+    ani_from_participant,
     branch_from_participant,
     is_sip_participant,
     parse_job_metadata,
@@ -50,6 +57,7 @@ from sip_utils import (
 )
 from startup_checks import (
     RateLimitCircuitBreaker,
+    assert_filler_audio_bank,
     assert_live_openai_key,
     assert_sip_host,
 )
@@ -567,6 +575,7 @@ async def my_agent(ctx: JobContext):
     try:
         assert_sip_host()
         assert_live_openai_key()
+        assert_filler_audio_bank()
     except RuntimeError:
         logger.exception("startup assert failed")
         raise
@@ -577,10 +586,31 @@ async def my_agent(ctx: JobContext):
             phone_number or metadata.get("direction") == "outbound"
         ),
     )
+    caller_store = get_shared_caller_store()
+    ani = ani_from_participant(participant)
+    if not ani and isinstance(phone_number, str):
+        from sip_utils import normalize_au_phone
+
+        ani = normalize_au_phone(phone_number)
+    if ani:
+        call_state.ani = ani
+        call_state.channel = "sip" if is_telephony else "web"
+        record = caller_store.lookup(ani)
+        if record:
+            apply_record_to_state(call_state, record)
+        else:
+            from re import sub as _sub
+
+            raw_digits = _sub(r"\D", "", ani)
+            if raw_digits.startswith("61") and len(raw_digits) == 11:
+                call_state.caller_mobile = "0" + raw_digits[2:]
+    else:
+        call_state.channel = "web"
     logger.info(
-        "call_state ready before speech branch=%s name=%s kill_switch=%s today=%s",
+        "call_state ready before speech branch=%s name=%s known=%s kill_switch=%s today=%s",
         call_state.branch,
         call_state.branch_name,
+        call_state.known_caller,
         kill_switch,
         call_state.today_spoken,
     )
@@ -606,16 +636,55 @@ async def my_agent(ctx: JobContext):
         cache_task = asyncio.create_task(cached_booking.run_refresh_loop(cache_stop))
         transfer_to = os.getenv("SIP_TRANSFER_TO", "").strip() or None
         ambient = AmbientBed()
+        if call_state.caller_mobile:
+            try:
+                looked = await booking.lookup_patient(mobile=call_state.caller_mobile)
+            except Exception:
+                looked = None
+                logger.exception("ANI lookup_patient failed")
+            else:
+                if isinstance(looked, dict):
+                    call_state.pms_record = looked
+                    if looked.get("is_existing_patient") and not call_state.caller_name:
+                        patients = looked.get("patients") or []
+                        if patients:
+                            call_state.caller_name = patients[0].get("name")
+                            call_state.known_caller = True
+                    last_booking = (looked.get("bookings") or [None])[0]
+                    if isinstance(last_booking, dict):
+                        call_state.last_appointment_private = last_booking
+                        dentist = str(last_booking.get("clinician") or "").strip()
+                        if dentist:
+                            call_state.usual_dentist = dentist
+        filler_player = FillerPlayer(ambient=ambient)
+        dead_air = DeadAirMonitor(
+            call_id=str(ctx.job.id),
+            branch=call_state.branch,
+            room=ctx.room,
+        )
         agent: Agent = AvaReceptionist(
             state=call_state,
             booking=booking,
             transfer_to=transfer_to,
             call_log=call_log,
             ambient=ambient,
+            caller_store=caller_store,
+            filler_player=filler_player,
+            dead_air=dead_air,
         )
         # OpenAI Realtime is speech-to-speech; no AssemblyAI/Groq/Cartesia pipeline.
         # Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/
         session = _build_ava_session()
+        session._filler_player = filler_player  # type: ignore[attr-defined]
+        filler_player.session = session
+
+        def _on_speech_created(*_args: Any, **_kwargs: Any) -> None:
+            filler_player.notify_model_audio()
+
+        try:
+            session.on("speech_created")(_on_speech_created)
+        except Exception:
+            logger.exception("could not attach filler duck listener")
         orig_say = session.say
 
         def _gated_say(text: Any, *args: Any, **kwargs: Any) -> Any:
@@ -635,7 +704,9 @@ async def my_agent(ctx: JobContext):
         cache_task = None
 
     _register_latency_logging(session)
-    rate_limit = RateLimitRecovery()
+    rate_limit = RateLimitRecovery(
+        player=getattr(agent, "filler_player", None) if persona_key == "ava" else None
+    )
     breaker = RateLimitCircuitBreaker()
 
     async def _trim_on_rate_limit() -> None:

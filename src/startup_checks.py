@@ -40,6 +40,13 @@ def assert_sip_host(env: Mapping[str, str] | None = None) -> str:
     return expected
 
 
+def assert_filler_audio_bank() -> None:
+    """Boot-fatal if the pre-rendered filler bank is missing or a pool is short."""
+    from filler_bank import assert_filler_bank
+
+    assert_filler_bank()
+
+
 def assert_live_openai_key(env: Mapping[str, str] | None = None) -> None:
     """Live OPENAI_API_KEY must not be the demo/harness key when both are set."""
     import os

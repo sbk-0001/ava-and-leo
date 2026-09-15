@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-15T03:39:37.965885+00:00",
+  "generated_at": "2026-09-15T04:26:49.668793+00:00",
   "live_audio": false,
   "target_longest_silence_ms": 800,
   "ack_pool": [
@@ -13,123 +13,73 @@
   ],
   "calls": [
     {
-      "slug": "01-new-patient-checkup",
-      "title": "New patient check-up \u2014 cache-first availability",
+      "slug": "01-slow-availability",
+      "title": "Booking \u2014 availability lookup forced to ~6s",
       "time_to_first_audio_ms": 0.0,
       "longest_silence_gap_ms": 0.1,
       "stock_phrases_used": [
         "Good morning! You're through to Shellharbour Dentists, Ava here.",
-        "two ticks, I'll pull that up",
-        "all good"
+        "won't be a sec \u2014 let me have a squiz",
+        "doo doo doo",
+        "sorry, this booking system's older than I am",
+        "won't be long, I can see it spinning"
       ],
       "first_audio_before_dispatch": true,
       "stage5_fallback": false,
       "audio_recording": null,
       "notes": [
-        "check_availability cached=True",
-        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
+        "Ava never silent, no repeated filler, sounds annoyed at the computer while a 6s availability lookup runs",
+        "ladder reached stage 4 on a 6s-class wait",
+        "stages=[1, 2, 3, 4]",
+        "offline machinery run \u2014 WAV only from --live with LiveKit + OpenAI secrets"
       ]
     },
     {
-      "slug": "02-reschedule-cancel",
-      "title": "Reschedule then cancel inside 24h",
+      "slug": "02-tool-timeout",
+      "title": "Tool timeout entirely \u2014 stage 5 take_message",
       "time_to_first_audio_ms": 0.0,
       "longest_silence_gap_ms": 0.1,
       "stock_phrases_used": [
         "righto, let's have a look for ya",
-        "Too easy. Have a good one!"
+        "nup... nup... hang on",
+        "bear with me, it's having a think about it",
+        "still here, just waiting on the screen",
+        "diary's stuck, so I'll leave a note for the team to call you back rather than guess a time"
       ],
       "first_audio_before_dispatch": true,
-      "stage5_fallback": false,
+      "stage5_fallback": true,
       "audio_recording": null,
       "notes": [
-        "book reverified",
-        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
+        "Diary never returns; stage 5 take_message; caller is satisfied",
+        "fallback=take_message",
+        "offline machinery run \u2014 WAV only from --live with LiveKit + OpenAI secrets"
       ]
     },
     {
-      "slug": "03-severe-pain",
-      "title": "Severe pain Friday \u2014 same-day ladder",
-      "time_to_first_audio_ms": 0.0,
-      "longest_silence_gap_ms": 0.1,
-      "stock_phrases_used": [
-        "righto, let's have a look for ya"
-      ],
-      "first_audio_before_dispatch": true,
-      "stage5_fallback": false,
-      "audio_recording": null,
-      "notes": [
-        "urgency=same_day",
-        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
-      ]
-    },
-    {
-      "slug": "04-swollen-swallow",
-      "title": "Swollen + swallowing \u2014 no book",
-      "time_to_first_audio_ms": 0.0,
-      "longest_silence_gap_ms": 0.1,
-      "stock_phrases_used": [
-        "righto, pulling up the diary"
-      ],
-      "first_audio_before_dispatch": true,
-      "stage5_fallback": false,
-      "audio_recording": null,
-      "notes": [
-        "do_not_book after first audio",
-        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
-      ]
-    },
-    {
-      "slug": "05-bot-ask-twice",
-      "title": "Are you a real person \u2014 twice",
+      "slug": "03-toothache-monologue",
+      "title": "Caller talks ~20s about a toothache",
       "time_to_first_audio_ms": 0.0,
       "longest_silence_gap_ms": 0.0,
       "stock_phrases_used": [
-        "no dramas",
-        "all good"
+        "you poor thing",
+        "ohh",
+        "oh no",
+        "aww",
+        "geez"
       ],
       "first_audio_before_dispatch": true,
       "stage5_fallback": false,
       "audio_recording": null,
       "notes": [
-        "bot_ask_count=2",
-        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
+        "Ava backchannels without taking the turn",
+        "backchannels=['you poor thing', 'ohh', 'oh no', 'aww', 'geez', 'geez', 'aww']",
+        "longest_silence_gap excluded while caller talking",
+        "offline machinery run \u2014 WAV only from --live with LiveKit + OpenAI secrets"
       ]
     },
     {
-      "slug": "06-figtree-dapto",
-      "title": "Figtree caller \u2014 offer Dapto",
-      "time_to_first_audio_ms": 0.0,
-      "longest_silence_gap_ms": 0.1,
-      "stock_phrases_used": [
-        "righto, pulling up the diary"
-      ],
-      "first_audio_before_dispatch": true,
-      "stage5_fallback": false,
-      "audio_recording": null,
-      "notes": [
-        "offered_branch=dapto",
-        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
-      ]
-    },
-    {
-      "slug": "07-unknown-fee",
-      "title": "Unknown fee \u2014 take_message",
-      "time_to_first_audio_ms": 0.0,
-      "longest_silence_gap_ms": 0.1,
-      "stock_phrases_used": [
-        "let me just have a look for ya"
-      ],
-      "first_audio_before_dispatch": true,
-      "stage5_fallback": false,
-      "audio_recording": null,
-      "notes": [
-        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
-      ]
-    },
-    {
-      "slug": "08-barge-in-three-times",
-      "title": "Barge-in three times \u2014 resume pool",
+      "slug": "04-barge-in-three",
+      "title": "Caller interrupts Ava three times",
       "time_to_first_audio_ms": 0.0,
       "longest_silence_gap_ms": 0.0,
       "stock_phrases_used": [
@@ -140,9 +90,80 @@
       "stage5_fallback": false,
       "audio_recording": null,
       "notes": [
-        "resume pool used, no sentence restart",
-        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
+        "Clean cuts, natural pickups, no restarted sentences",
+        "resumes=['sorry, go on', 'yep yep, sorry', 'yep yep, sorry']",
+        "offline machinery run \u2014 WAV only from --live with LiveKit + OpenAI secrets"
+      ]
+    },
+    {
+      "slug": "05-bot-ask-twice",
+      "title": "Caller asks are you a real person twice",
+      "time_to_first_audio_ms": 0.0,
+      "longest_silence_gap_ms": 0.0,
+      "stock_phrases_used": [
+        "not a problem"
+      ],
+      "first_audio_before_dispatch": true,
+      "stage5_fallback": false,
+      "audio_recording": null,
+      "notes": [
+        "Deflect once, then honest AI receptionist, then help",
+        "bot_ask_count=2",
+        "offline machinery run \u2014 WAV only from --live with LiveKit + OpenAI secrets"
+      ]
+    },
+    {
+      "slug": "06-unknown-fee",
+      "title": "Caller asks a price not in the fee table",
+      "time_to_first_audio_ms": 0.0,
+      "longest_silence_gap_ms": 0.1,
+      "stock_phrases_used": [
+        "won't be a sec \u2014 let me have a squiz"
+      ],
+      "first_audio_before_dispatch": true,
+      "stage5_fallback": false,
+      "audio_recording": null,
+      "notes": [
+        "No guess; offer callback; take_message",
+        "quote_status=unknown",
+        "offline machinery run \u2014 WAV only from --live with LiveKit + OpenAI secrets"
+      ]
+    },
+    {
+      "slug": "07-swollen-swallow",
+      "title": "Facial swelling and trouble swallowing",
+      "time_to_first_audio_ms": 0.0,
+      "longest_silence_gap_ms": 0.1,
+      "stock_phrases_used": [
+        "let me just have a look for ya"
+      ],
+      "first_audio_before_dispatch": true,
+      "stage5_fallback": false,
+      "audio_recording": null,
+      "notes": [
+        "Fillers and jokes off; emergency path; do not book",
+        "urgency=emergency_000",
+        "offline machinery run \u2014 WAV only from --live with LiveKit + OpenAI secrets"
+      ]
+    },
+    {
+      "slug": "08-cancel-24h-fee",
+      "title": "Cancellation inside 24 hours \u2014 $50 fee must be raised",
+      "time_to_first_audio_ms": 0.0,
+      "longest_silence_gap_ms": 0.1,
+      "stock_phrases_used": [
+        "righto, let's have a look for ya"
+      ],
+      "first_audio_before_dispatch": true,
+      "stage5_fallback": false,
+      "audio_recording": null,
+      "notes": [
+        "Warmly raise the fifty dollar fee; never waive it",
+        "fee_applies=True",
+        "fee_aud=50",
+        "offline machinery run \u2014 WAV only from --live with LiveKit + OpenAI secrets"
       ]
     }
-  ]
+  ],
+  "record_command": "set -a && source .env.local && set +a && uv run python src/never_silent_harness.py --live --out demos/never-silent"
 }

@@ -88,6 +88,7 @@ def test_agent_wires_never_silent_machinery() -> None:
 
     agent_src = inspect.getsource(agent.my_agent)
     assert "CachedBookingProvider" in agent_src
+    assert "apply_job_booking_overrides" in agent_src
     assert "prewarm" in agent_src
     assert "AmbientBed" in agent_src
     assert "attach_backchannels" in agent_src

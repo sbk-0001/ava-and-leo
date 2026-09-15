@@ -1,4 +1,4 @@
-"""Clinic-staff web portal for Illawarra Dentists Ava.
+"""Clinic-staff web portal for Ava (Shellharbour / Dapto / Woonona).
 
 Serves branch facts, the mock diary, booking mutations, and a LiveKit token
 so the browser can talk to the running Ava worker. Secrets stay on the server.
@@ -81,7 +81,7 @@ def create_app(
     portal_password: str | None = None,
 ) -> FastAPI:
     """Build the portal app. Tests pass an in-memory PracticeClient."""
-    app = FastAPI(title="Illawarra Dentists — Ava desk", docs_url=None)
+    app = FastAPI(title="Ava desk — Shellharbour · Dapto · Woonona", docs_url=None)
     app.state.practice = practice
     app.state.portal_password = (
         portal_password

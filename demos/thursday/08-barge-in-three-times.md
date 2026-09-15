@@ -1,0 +1,25 @@
+# Barge-in three times mid-sentence
+
+- DID: `+61242169911` → **Shellharbour Dentists** (`shellharbour`)
+- CallState: `{'branch': 'shellharbour', 'branch_name': 'Shellharbour Dentists', 'caller_name': None, 'caller_mobile': None, 'is_existing_patient': None, 'intent': None, 'appointment_type': None, 'proposed_slot': None, 'confirmed_slot': None, 'urgency_level': 'routine', 'escalation_flag': False, 'turn_count': 3, 'ask_counts': {}, 'offered_branch': None, 'bot_ask_count': 0, 'kill_switch': False}`
+- started_at: 2026-09-15T02:03:23.006632+00:00
+- ended_at: 2026-09-15T02:03:23.006681+00:00
+
+```
+call_id: 08-barge-in-three-times
+room: demo-08-barge-in-three-times
+branch: shellharbour
+started_at: 2026-09-15T02:03:23.006632+00:00
+ended_at: 2026-09-15T02:03:23.006681+00:00
+
+[2026-09-15T02:03:23.006637+00:00] assistant: Good morning, Shellharbour Dentists, this is Ava!
+[2026-09-15T02:03:23.006642+00:00] assistant: So what I can do is pull up the diar—
+[2026-09-15T02:03:23.006655+00:00] user: Hang on — is parking easy there?
+[2026-09-15T02:03:23.006657+00:00] assistant: Sorry, go on. Yep, carpark right out the front off Captain Cook Drive.
+[2026-09-15T02:03:23.006659+00:00] assistant: And for the check-up it's the new patient spec—
+[2026-09-15T02:03:23.006667+00:00] user: Does that include x-rays?
+[2026-09-15T02:03:23.006669+00:00] assistant: Yep, yep — up to two digital x-rays, fluoride, printed plan.
+[2026-09-15T02:03:23.006670+00:00] assistant: If I book you Thursd—
+[2026-09-15T02:03:23.006677+00:00] user: Make it Friday.
+[2026-09-15T02:03:23.006679+00:00] assistant: Friday, too easy. Let me just have a look...
+```

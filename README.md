@@ -2,9 +2,11 @@
   <img src="./.github/assets/livekit-mark.png" alt="LiveKit logo" width="100" height="100">
 </a>
 
-# Ava — Illawarra Dentists receptionist
+# Ava — Shellharbour · Dapto · Woonona receptionist
 
-Ava is the phone receptionist for **Illawarra Dentists** (Barrack Heights / Shellharbour Dentists, Dapto Dentists, Woonona Dentists): OpenAI Realtime (`gpt-realtime`, voice **marin**), low-latency speech-to-speech. Callers reach the Illawarra Dentists group number first; Ava then helps them choose which clinic to book at. The older generic AssemblyAI/Groq/Cartesia assistant is a secondary pipeline (`AGENT_PERSONA=generic`, alias `ava-generic`). `AGENT_PERSONA=leo` still maps to Ava so old env files keep working.
+Ava is the full-duplex phone receptionist for **Shellharbour Dentists**, **Dapto Dentists**, and **Woonona Dentists**: OpenAI Realtime (`gpt-realtime`, voice **marin**), Australian, Illawarra local. **The inbound DID maps the branch at session start into `CallState` before she speaks.** She answers as that clinic — "Good morning, Shellharbour Dentists, this is Ava!" — and never runs a "which branch" menu. She only offers another site if the caller raises it or a suburb clearly suits one better (demo: Figtree → Dapto).
+
+The older generic AssemblyAI/Groq/Cartesia assistant is a secondary pipeline (`AGENT_PERSONA=generic`, alias `ava-generic`). `AGENT_PERSONA=leo` still maps to Ava so old env files keep working.
 
 | `AGENT_PERSONA` | Who | Path |
 |-----------------|-----|------|
@@ -15,18 +17,17 @@ Ava is the phone receptionist for **Illawarra Dentists** (Barrack Heights / Shel
 
 Unset `AGENT_PERSONA` defaults to **ava on telephony** (SIP inbound or outbound) and **generic** on web/console. The clinic portal always dispatches Ava (`persona: ava` in the room token).
 
-Ava's spoken style, branch facts, fee catalogue, and tool rules live in [`src/persona.py`](src/persona.py). Parking, hours, and dentist names are filled from the official sites (2026-09-14). Fields marked `VERIFY` are unknown — Ava must not invent them. Say **confirmed** only after a book/reschedule/cancel tool returns `confirmed: true`.
+Spoken identity is the **verbatim** block in [`src/instructions/ava_receptionist.md`](src/instructions/ava_receptionist.md) (`{{BRANCH_NAME}}` interpolated at session start — do not tidy it). Clinic facts and the fee table live in [`src/persona.py`](src/persona.py) and match the product brief only. Fields marked `VERIFY` are unknown — Ava must not invent them. Flow control lives in [`src/call_state.py`](src/call_state.py) (hard ask counters, urgency, suburb offers), not in the prompt. Say **confirmed** only after a book/reschedule/cancel tool returns `confirmed: true`. Quote **only** the fee table; unknown services return `status: unknown` and she offers a callback.
 
 ## Low-latency Realtime (not zero latency)
 
 Ava stays on OpenAI Realtime speech-to-speech (`marin`). Settings aimed at human, interruptible phone turns (verified against [OpenAI Realtime turn detection](https://docs.livekit.io/agents/models/realtime/plugins/openai/#turn-detection) and [interruption in realtime mode](https://docs.livekit.io/agents/logic/turns/#interruption-in-realtime-mode)):
 
-- Semantic VAD with `eagerness="medium"` (documented default; less likely to cut the caller off mid-sentence)
-- `interrupt_response=True` so the caller can barge in
-- `temperature=0.9` for slightly more natural variation
+- **Server VAD** with `silence_duration_ms=500` (450–550ms window) and `interrupt_response=True` so the caller can cut her off mid-word
+- Speech rate `speed=0.9`; temperature `0.95` (0.9–1.0). Response length is not capped tight
 - `AgentSession` `turn_detection="realtime_llm"` with interruptions enabled
-- Spoken replies kept to one idea per turn; parking/hours/dentists are instant facts (no tool round-trip before speaking)
-- No SSML or `[laughs]` tags — Realtime marin cannot render them
+- Every tool call fires a filler utterance the same turn (`generate_reply` cover speech) so there is no dead air
+- Target: under 800ms to first audio each turn
 
 ## Noise cancellation (Call Ava and SIP)
 
@@ -106,15 +107,21 @@ AGENT_PERSONA=ava PRACTICE_SOFTWARE=mock \
 ```bash
 SIP_OUTBOUND_TRUNK_ID=ST_xxxx          # lk sip outbound list
 SIP_DID_MAP=+61242169911:shellharbour,+61242880737:dapto,+61242844486:woonona
-SIP_TRANSFER_TO=+61242169911           # optional cold-transfer destination
-PRACTICE_SOFTWARE=disconnected         # production default; set mock to use the seeded diary
-AGENT_PERSONA=ava                      # optional; telephony already defaults to ava
-AVA_REALTIME_VOICE=marin               # female AU receptionist (OpenAI Realtime)
+SIP_TRANSFER_TO=+61242169911           # default cold-transfer; per-branch SIP_TRANSFER_DAPTO etc. win
+AVA_KILL_SWITCH=0                      # 1 = skip Ava and transfer_to_human immediately
+BOOKING_PROVIDER=memory                # zavy360 = stub (see docs/zavy360.md)
+PRACTICE_SOFTWARE=mock                 # local demo diary; production telephony defaults disconnected
+AGENT_PERSONA=ava
+AVA_REALTIME_VOICE=marin
 ```
 
-Inbound branch mapping uses the SIP participant attribute `sip.trunkPhoneNumber` (the DID the caller dialled).
+Inbound DID mapping uses `sip.trunkPhoneNumber` (the number the caller dialled). That id is written to `CallState.branch` **before** the greeting. Unknown DIDs fall back to Shellharbour.
 
-`PRACTICE_SOFTWARE` unset: **mock** on local/dev/portal/console, **disconnected** on telephony and `uv run python src/agent.py start`. Mock never invents slots; it seeds the next two weeks from real dentist names and published hours.
+`BOOKING_PROVIDER=memory` seeds a week of availability for all three branches (Shellharbour dentists by name; Dapto/Woonona as "available dentist" because the brief does not name those clinicians). `BOOKING_PROVIDER=zavy360` is stubbed and never invents slots — notes in [`docs/zavy360.md`](docs/zavy360.md).
+
+Kill-switch: `AVA_KILL_SWITCH=1` makes `transfer_to_human` fire on enter. `end_call` deletes the LiveKit room (or shuts the job down). Both are wired, not stubs.
+
+Call logs: every turn gets a UTC timestamp (never NULL) under `AVA_CALL_LOG_DIR` (default `.data/call_logs`) and, if configured, Supabase `ava_transcript_turns.created_at`.
 
 ## Run the agent only
 
@@ -148,29 +155,36 @@ uv run python src/make_call.py --to +61400000000 --branch dapto
 
 The script [dispatches](https://docs.livekit.io/agents/server/agent-dispatch/) agent `ava-and-leo` and calls [`CreateSIPParticipant`](https://docs.livekit.io/telephony/making-calls/outbound-calls/) with `wait_until_answered=True`. Failed dials raise `TwirpError` / `SipCallError` (busy, no answer, trunk failure). Mid-call hangups are handled per [SIP disconnect docs](https://docs.livekit.io/telephony/making-calls/outbound-calls/#mid-call-disconnections): `USER_UNAVAILABLE` and `SIP_TRUNK_FAILURE` explicitly shut down the job.
 
-On outbound, Ava waits for the callee to speak first. On inbound, Ava greets as Illawarra Dentists, then helps choose Shellharbour, Dapto, or Woonona.
+On outbound, Ava waits for the callee to speak first. On inbound, Ava greets as the **mapped branch**.
 
 ## Tests
 
 ```bash
-uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py tests/test_room_options.py -v
+uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py tests/test_room_options.py tests/test_call_state.py tests/test_booking.py tests/test_instructions.py tests/test_call_log.py tests/test_demo_harness.py -v
 uv run pytest            # includes generic-pipeline evals; needs LIVEKIT_* in CI
+uv run python src/demo_harness.py   # writes demos/thursday/*.md
 ```
 
-Unit tests cover persona switching, Ava naming, human VOICE_INSTRUCTIONS, Illawarra Dentists greeting, Krisp noise-cancellation gating, branch facts (parking/hours/dentists), canned fees, DID mapping (including a MagicMock console participant), mock book/reschedule/cancel `confirmed=true`, and the marin voice default.
+Thursday demo transcripts (scripted harness, tools are real): [`demos/thursday/`](demos/thursday/).
 
 ## Layout
 
 ```
-src/agent.py              # entrypoint: Ava Realtime or generic pipeline
-src/persona.py            # Ava prompts, branches, fees (source of truth)
-src/ava_receptionist.py   # AvaReceptionist + office-system tools
-src/practice.py           # disconnected / mock practice software
-src/portal.py             # FastAPI clinic desk (facts, diary, Call Ava token)
-src/portal_static/        # portal UI
-src/run_local.py          # one-command agent + portal
-src/sip_utils.py          # DID map, disconnect handling
-src/make_call.py          # outbound dispatch + SIP dial
+src/agent.py                         # entrypoint: DID → CallState before speech
+src/instructions/ava_receptionist.md # verbatim session instructions
+src/call_state.py                    # branch, asks, urgency, kill-switch
+src/booking.py                       # BookingProvider + memory + Zavy360 stub
+src/persona.py                       # brief-only facts + fee table + instruction loader
+src/ava_receptionist.py              # tools (availability, book, cancel+$50, transfer, end_call)
+src/call_log.py                      # timestamped replayable transcripts
+src/practice.py                      # in-memory diary used by memory provider + portal
+src/demo_harness.py                  # Thursday scenarios without live SIP
+src/portal.py / portal_static/       # staff desk
+src/run_local.py                     # one-command agent + portal
+src/sip_utils.py                     # DID map, disconnect handling
+src/make_call.py                     # outbound dispatch + SIP dial
+docs/zavy360.md                      # API investigation notes
+demos/thursday/                      # scenario transcripts
 ```
 
 ## Docs

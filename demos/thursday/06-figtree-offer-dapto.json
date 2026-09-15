@@ -1,0 +1,165 @@
+{
+  "call_id": "06-figtree-offer-dapto",
+  "room_name": "demo-06-figtree-offer-dapto",
+  "branch": "shellharbour",
+  "started_at": "2026-09-15T02:03:23.005939+00:00",
+  "ended_at": "2026-09-15T02:03:23.006039+00:00",
+  "turns": [
+    {
+      "turn_index": 0,
+      "role": "assistant",
+      "content": "Good morning, Shellharbour Dentists, this is Ava!",
+      "timestamp": "2026-09-15T02:03:23.005943+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 1,
+      "role": "user",
+      "content": "I live in Figtree, can I come in for a clean?",
+      "timestamp": "2026-09-15T02:03:23.005956+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 2,
+      "role": "assistant",
+      "content": "Look, if Dapto's easier for ya, they're the same mob \u2014 I can give you their number, two four two eight eight, oh seven three seven, or I'll see what they've got. Up to you.",
+      "timestamp": "2026-09-15T02:03:23.005959+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 3,
+      "role": "user",
+      "content": "Dapto would be easier actually.",
+      "timestamp": "2026-09-15T02:03:23.005968+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 4,
+      "role": "tool",
+      "content": "{'ok': True, 'branch_id': 'dapto', 'appointment_type': 'check-up', 'date_from': '2026-09-15', 'date_to': '2026-09-21', 'slots': [{'slot_id': 'slot_dapto_2026-09-15_0800_available-dentist', 'date': '2026-09-15', 'time': '08:00', 'clinician': 'available dentist', 'branch_id': 'dapto', 'taken': False}, {'slot_id': 'slot_dapto_2026-09-15_0830_available-dentist', 'date': '2026-09-15', 'time': '08:30', 'clinician': 'available dentist', 'branch_id': 'dapto', 'taken': False}, {'slot_id': 'slot_dapto_2026-09-15_0900_available-dentist', 'date': '2026-09-15', 'time': '09:00', 'clinician': 'available dentist', 'branch_id': 'dapto', 'taken': False}, {'slot_id': 'slot_dapto_2026-09-15_0930_available-dentist', 'date': '2026-09-15', 'time': '09:30', 'clinician': 'available dentist', 'branch_id': 'dapto', 'taken': False}, {'slot_id': 'slot_dapto_2026-09-15_1030_available-dentist', 'date': '2026-09-15', 'time': '10:30', 'clinician': 'available dentist', 'branch_id': 'dapto', 'taken': False}, {'slot_id': 'slot_dapto_2026-09-15_1100_available-dentist', 'date': '2026-09-15', 'time': '11:00', 'clinician': 'available dentist', 'branch_id': 'dapto', 'taken': False}, {'slot_id': 'slot_dapto_2026-09-15_1130_available-dentist', 'date': '2026-09-15', 'time': '11:30', 'clinician': 'available dentist', 'branch_id': 'dapto', 'taken': False}, {'slot_id': 'slot_dapto_2026-09-15_1200_available-dentist', 'date': '2026-09-15', 'time': '12:00', 'clinician': 'available dentist', 'branch_id': 'dapto', 'taken': Fal",
+      "timestamp": "2026-09-15T02:03:23.006034+00:00",
+      "tool_name": "check_availability",
+      "tool_payload": {
+        "ok": true,
+        "branch_id": "dapto",
+        "appointment_type": "check-up",
+        "date_from": "2026-09-15",
+        "date_to": "2026-09-21",
+        "slots": [
+          {
+            "slot_id": "slot_dapto_2026-09-15_0800_available-dentist",
+            "date": "2026-09-15",
+            "time": "08:00",
+            "clinician": "available dentist",
+            "branch_id": "dapto",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_dapto_2026-09-15_0830_available-dentist",
+            "date": "2026-09-15",
+            "time": "08:30",
+            "clinician": "available dentist",
+            "branch_id": "dapto",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_dapto_2026-09-15_0900_available-dentist",
+            "date": "2026-09-15",
+            "time": "09:00",
+            "clinician": "available dentist",
+            "branch_id": "dapto",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_dapto_2026-09-15_0930_available-dentist",
+            "date": "2026-09-15",
+            "time": "09:30",
+            "clinician": "available dentist",
+            "branch_id": "dapto",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_dapto_2026-09-15_1030_available-dentist",
+            "date": "2026-09-15",
+            "time": "10:30",
+            "clinician": "available dentist",
+            "branch_id": "dapto",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_dapto_2026-09-15_1100_available-dentist",
+            "date": "2026-09-15",
+            "time": "11:00",
+            "clinician": "available dentist",
+            "branch_id": "dapto",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_dapto_2026-09-15_1130_available-dentist",
+            "date": "2026-09-15",
+            "time": "11:30",
+            "clinician": "available dentist",
+            "branch_id": "dapto",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_dapto_2026-09-15_1200_available-dentist",
+            "date": "2026-09-15",
+            "time": "12:00",
+            "clinician": "available dentist",
+            "branch_id": "dapto",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_dapto_2026-09-15_1230_available-dentist",
+            "date": "2026-09-15",
+            "time": "12:30",
+            "clinician": "available dentist",
+            "branch_id": "dapto",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_dapto_2026-09-15_1300_available-dentist",
+            "date": "2026-09-15",
+            "time": "13:00",
+            "clinician": "available dentist",
+            "branch_id": "dapto",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_dapto_2026-09-15_1330_available-dentist",
+            "date": "2026-09-15",
+            "time": "13:30",
+            "clinician": "available dentist",
+            "branch_id": "dapto",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_dapto_2026-09-15_1400_available-dentist",
+            "date": "2026-09-15",
+            "time": "14:00",
+            "clinician": "available dentist",
+            "branch_id": "dapto",
+            "taken": false
+          }
+        ]
+      }
+    },
+    {
+      "turn_index": 5,
+      "role": "assistant",
+      "content": "Too easy. Let me peek at Dapto's diary... aaaand \u2014 there we go. Want tomorrow arvo?",
+      "timestamp": "2026-09-15T02:03:23.006037+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    }
+  ],
+  "extra": {
+    "title": "Caller in Figtree \u2014 offer Dapto",
+    "did": "+61242169911"
+  }
+}

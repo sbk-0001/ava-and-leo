@@ -1,73 +1,59 @@
-"""Canned-fee quoting must never invent a price."""
+"""Fee quoting must only use the product-brief table — never guess."""
 
-from persona import VERIFY, quote_fee
+from persona import quote_fee
 
 
-def test_unverified_fee_is_not_quoted() -> None:
+def test_unknown_item_is_unknown() -> None:
     result = quote_fee("filling", "shellharbour")
     assert result["ok"] is False
-    assert result["reason"] == "fee_not_verified"
-    assert result.get("confirmed") is not True
-    assert "amount_aud" not in result or result["amount_aud"] == VERIFY
+    assert result["status"] == "unknown"
+    assert result["reason"] == "unknown_item"
+    assert "amount_aud" not in result
+    assert "callback" in result["note"].lower() or "message" in result["note"].lower()
 
 
-def test_unknown_item_is_not_invented() -> None:
+def test_mystery_package_is_not_invented() -> None:
     result = quote_fee("mystery_implant_package", "shellharbour")
     assert result["ok"] is False
-    assert result["reason"] in {"fee_not_verified", "unknown_item"}
-    assert result.get("confirmed") is not True
+    assert result["status"] == "unknown"
     assert "amount_aud" not in result
 
 
-def test_known_canned_fee_is_quoted_only_from_table() -> None:
-    table = {
-        "shellharbour": {"filling": "185.00"},
-        "dapto": {"filling": VERIFY},
-        "woonona": {"filling": VERIFY},
-    }
-    quoted = quote_fee("filling", "shellharbour", table=table)
-    assert quoted["ok"] is True
-    assert quoted["amount_aud"] == "185.00"
-    assert quoted["item"] == "filling"
-
-    unverified = quote_fee("filling", "dapto", table=table)
-    assert unverified["ok"] is False
-    assert unverified["reason"] == "fee_not_verified"
-    assert unverified.get("confirmed") is not True
-
-
-def test_shellharbour_check_up_does_not_pick_one_gospel_amount() -> None:
+def test_new_patient_check_up_special() -> None:
     result = quote_fee("check-up and clean", "shellharbour")
-    amount = str(result.get("amount_aud") or "")
-    specials = " ".join(result.get("published_specials") or [])
-    note = str(result.get("note") or "")
-    blob = f"{amount} {specials} {note}".lower()
-    assert "250" in blob
-    assert "150" in blob
-    assert (
-        result.get("amount_aud") in (None, VERIFY, "") or result.get("gospel") is False
-    )
+    assert result["ok"] is True
+    speak = result["speak"].lower()
+    assert "gap free" in speak or "gap-free" in speak
+    assert "250" in speak
+    assert "350" in speak
+    assert "not combinable" in speak
 
 
-def test_shellharbour_published_specials_may_be_quoted() -> None:
-    whitening = quote_fee("whitening", "shellharbour")
+def test_published_fees_match_brief() -> None:
+    whitening = quote_fee("whitening", "dapto")
     assert whitening["ok"] is True
-    assert "650" in str(whitening.get("amount_aud") or "") or "650" in str(
-        whitening.get("note") or ""
-    )
+    assert "650" in whitening["speak"]
+    assert "850" in whitening["speak"]
 
-    implant = quote_fee("implant", "shellharbour")
+    implant = quote_fee("implant with crown", "woonona")
     assert implant["ok"] is True
-    assert "5000" in str(implant.get("amount_aud") or implant.get("note") or "")
+    assert "4,500" in implant["speak"] or "4500" in str(implant.get("amount_aud"))
 
     veneers = quote_fee("veneers", "shellharbour")
     assert veneers["ok"] is True
-    assert "1300" in str(veneers.get("amount_aud") or veneers.get("note") or "")
+    assert "1,300" in veneers["speak"] or "1300" in str(veneers.get("amount_aud"))
+
+    wisdom = quote_fee("wisdom tooth removal", "shellharbour")
+    assert wisdom["ok"] is True
+    assert "350" in wisdom["speak"] and "500" in wisdom["speak"]
+
+    hcf = quote_fee("HCF", "shellharbour")
+    assert hcf["ok"] is True
+    assert "HCF" in hcf["speak"]
+    assert "HICAPS" in hcf["speak"]
 
 
-def test_dapto_and_woonona_unpublished_items_stay_verify() -> None:
-    for branch_id in ("dapto", "woonona"):
-        for item in ("filling", "extraction", "exam"):
-            result = quote_fee(item, branch_id)
-            assert result["ok"] is False, (branch_id, item, result)
-            assert result.get("confirmed") is not True
+def test_fees_are_group_wide() -> None:
+    for branch_id in ("shellharbour", "dapto", "woonona"):
+        result = quote_fee("check-up", branch_id)
+        assert result["ok"] is True, (branch_id, result)

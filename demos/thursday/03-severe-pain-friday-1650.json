@@ -1,0 +1,173 @@
+{
+  "call_id": "03-severe-pain-friday-1650",
+  "room_name": "demo-03-severe-pain-friday-1650",
+  "branch": "shellharbour",
+  "started_at": "2026-09-15T02:03:23.005206+00:00",
+  "ended_at": "2026-09-15T02:03:23.005285+00:00",
+  "turns": [
+    {
+      "turn_index": 0,
+      "role": "assistant",
+      "content": "Good morning, Shellharbour Dentists, this is Ava!",
+      "timestamp": "2026-09-15T02:03:23.005211+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 1,
+      "role": "user",
+      "content": "I've got a really bad toothache, it's 4:50 on Friday, I can't sleep.",
+      "timestamp": "2026-09-15T02:03:23.005224+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 2,
+      "role": "assistant",
+      "content": "Ohh no. How long's that been going on for?",
+      "timestamp": "2026-09-15T02:03:23.005227+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 3,
+      "role": "user",
+      "content": "Since Saturday, it's getting worse.",
+      "timestamp": "2026-09-15T02:03:23.005235+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 4,
+      "role": "assistant",
+      "content": "Aww, and you've toughed it out all weekend? You poor thing. Right \u2014 let's get you in today. Let me just have a look... doo doo doo...",
+      "timestamp": "2026-09-15T02:03:23.005237+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    },
+    {
+      "turn_index": 5,
+      "role": "tool",
+      "content": "{'ok': True, 'branch_id': 'shellharbour', 'appointment_type': 'emergency', 'date_from': '2026-09-15', 'date_to': '2026-09-15', 'slots': [{'slot_id': 'slot_shellharbour_2026-09-15_0830_dr-pat-pandey', 'date': '2026-09-15', 'time': '08:30', 'clinician': 'Dr Pat Pandey', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_0900_dr-maryam-kalo', 'date': '2026-09-15', 'time': '09:00', 'clinician': 'Dr Maryam Kalo', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_0930_dr-rick-wasef', 'date': '2026-09-15', 'time': '09:30', 'clinician': 'Dr Rick Wasef', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_1000_dr-mohit-tolani', 'date': '2026-09-15', 'time': '10:00', 'clinician': 'Dr Mohit Tolani', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_1030_dr-pat-pandey', 'date': '2026-09-15', 'time': '10:30', 'clinician': 'Dr Pat Pandey', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_1100_dr-maryam-kalo', 'date': '2026-09-15', 'time': '11:00', 'clinician': 'Dr Maryam Kalo', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_1130_dr-rick-wasef', 'date': '2026-09-15', 'time': '11:30', 'clinician': 'Dr Rick Wasef', 'branch_id': 'shellharbour', 'taken': False}, {'slot_id': 'slot_shellharbour_2026-09-15_1200_dr-mohit-tolani', 'date': '2026-09-15', 'time': '12:00', 'clin",
+      "timestamp": "2026-09-15T02:03:23.005278+00:00",
+      "tool_name": "check_availability",
+      "tool_payload": {
+        "ok": true,
+        "branch_id": "shellharbour",
+        "appointment_type": "emergency",
+        "date_from": "2026-09-15",
+        "date_to": "2026-09-15",
+        "slots": [
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_0830_dr-pat-pandey",
+            "date": "2026-09-15",
+            "time": "08:30",
+            "clinician": "Dr Pat Pandey",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_0900_dr-maryam-kalo",
+            "date": "2026-09-15",
+            "time": "09:00",
+            "clinician": "Dr Maryam Kalo",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_0930_dr-rick-wasef",
+            "date": "2026-09-15",
+            "time": "09:30",
+            "clinician": "Dr Rick Wasef",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1000_dr-mohit-tolani",
+            "date": "2026-09-15",
+            "time": "10:00",
+            "clinician": "Dr Mohit Tolani",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1030_dr-pat-pandey",
+            "date": "2026-09-15",
+            "time": "10:30",
+            "clinician": "Dr Pat Pandey",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1100_dr-maryam-kalo",
+            "date": "2026-09-15",
+            "time": "11:00",
+            "clinician": "Dr Maryam Kalo",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1130_dr-rick-wasef",
+            "date": "2026-09-15",
+            "time": "11:30",
+            "clinician": "Dr Rick Wasef",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1200_dr-mohit-tolani",
+            "date": "2026-09-15",
+            "time": "12:00",
+            "clinician": "Dr Mohit Tolani",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1230_dr-pat-pandey",
+            "date": "2026-09-15",
+            "time": "12:30",
+            "clinician": "Dr Pat Pandey",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1300_dr-maryam-kalo",
+            "date": "2026-09-15",
+            "time": "13:00",
+            "clinician": "Dr Maryam Kalo",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1330_dr-rick-wasef",
+            "date": "2026-09-15",
+            "time": "13:30",
+            "clinician": "Dr Rick Wasef",
+            "branch_id": "shellharbour",
+            "taken": false
+          },
+          {
+            "slot_id": "slot_shellharbour_2026-09-15_1400_dr-mohit-tolani",
+            "date": "2026-09-15",
+            "time": "14:00",
+            "clinician": "Dr Mohit Tolani",
+            "branch_id": "shellharbour",
+            "taken": false
+          }
+        ]
+      }
+    },
+    {
+      "turn_index": 6,
+      "role": "assistant",
+      "content": "I've got a 08:30, or there's a 09:00 this arvo. Which suits ya better?",
+      "timestamp": "2026-09-15T02:03:23.005282+00:00",
+      "tool_name": null,
+      "tool_payload": null
+    }
+  ],
+  "extra": {
+    "title": "Severe pain Friday 4:50pm",
+    "did": "+61242169911"
+  }
+}

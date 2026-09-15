@@ -14,7 +14,7 @@ async def test_thursday_transcripts(tmp_path: Path) -> None:
     texts = {path.name: path.read_text() for path in paths}
 
     one = texts["01-new-patient-checkup-hcf.md"]
-    assert "Good morning, Shellharbour Dentists, this is Ava!" in one
+    assert "Morning, Shellharbour Dentists, Ava speaking!" in one
     assert "HCF" in one
     assert "gap free" in one.lower() or "gap-free" in one.lower()
     assert "book_appointment" in one
@@ -35,7 +35,7 @@ async def test_thursday_transcripts(tmp_path: Path) -> None:
     )
 
     five = texts["05-bot-ask-twice.md"]
-    assert "long day on the desk" in five
+    assert "long morning on the desk" in five
     assert "AI receptionist" in five or "I'm an AI" in five
 
     six = texts["06-figtree-offer-dapto.md"]

@@ -23,6 +23,16 @@ def test_default_realtime_voice_is_marin() -> None:
     assert resolve_ava_voice(env={"LEO_REALTIME_VOICE": "cedar"}) == "cedar"
 
 
+def test_availability_tools_require_real_slot_ids() -> None:
+    check = inspect.getsource(AvaReceptionist.check_availability)
+    book = inspect.getsource(AvaReceptionist.book_appointment)
+    assert "must check" in check.lower() or "before offering" in check.lower()
+    assert "next week" in check
+    assert "exact slot_id" in book
+    assert "invalid_slot_id" in book
+    assert "check_availability" in book
+
+
 def test_required_tools_are_present() -> None:
     source = inspect.getsource(AvaReceptionist)
     for name in (

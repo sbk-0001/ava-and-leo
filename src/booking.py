@@ -23,6 +23,10 @@ logger = logging.getLogger("booking")
 
 SYDNEY = ZoneInfo("Australia/Sydney")
 PROVIDER_TIMEOUT_S = 8.0
+CANONICAL_SLOT_ID_RE = re.compile(r"^slot_[a-z0-9]+_\d{4}-\d{2}-\d{2}_")
+_TIME_OF_DAY_RE = re.compile(
+    r"\b(morning|mornings|morno|arvo|afternoon|afternoons|evening|evenings)\b"
+)
 
 
 class BookingProvider(Protocol):
@@ -121,13 +125,24 @@ def parse_date_range(
 ) -> tuple[str, str]:
     """Accept ISO dates, 'today', 'this week', 'next week', 'next tuesday'."""
     now = today or datetime.now(SYDNEY).date()
-    raw = re.sub(r"[^\w\s/-]+", " ", (date_range or "").lower())
+    raw = _TIME_OF_DAY_RE.sub("", (date_range or "").strip().lower())
+    raw = re.sub(r"[^\w\s/-]+", " ", raw)
     raw = re.sub(r"\s+", " ", raw).strip()
     if not raw or raw in {"today", "asap", "soon"}:
         return now.isoformat(), now.isoformat()
     if raw in {"this week", "week"}:
         end = now + timedelta(days=6)
         return now.isoformat(), end.isoformat()
+    if raw in {"next week"}:
+        days_until_monday = (7 - now.weekday()) % 7 or 7
+        start = now + timedelta(days=days_until_monday)
+        return start.isoformat(), (start + timedelta(days=6)).isoformat()
+    weekday = re.fullmatch(r"next (" + "|".join(_WEEKDAYS) + r")", raw)
+    if weekday:
+        target = _WEEKDAYS[weekday.group(1)]
+        delta = (target - now.weekday()) % 7 or 7
+        day = now + timedelta(days=delta)
+        return day.isoformat(), day.isoformat()
     if raw in {"tomorrow"}:
         nxt = now + timedelta(days=1)
         return nxt.isoformat(), nxt.isoformat()
@@ -195,6 +210,25 @@ def spoken_two_slot_offer(slots: list[dict[str, Any]]) -> str:
     return f"I've got {parts[0]}, or {parts[1]} — which suits?"
 
 
+def is_canonical_slot_id(slot_id: str) -> bool:
+    """Diary ids look like slot_<branch>_<YYYY-MM-DD>_<time>_dr-..."""
+    return bool(CANONICAL_SLOT_ID_RE.match((slot_id or "").strip()))
+
+
+def invalid_slot_id_result(slot_id: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "confirmed": False,
+        "reason": "invalid_slot_id",
+        "slot_id": slot_id,
+        "note": (
+            "That slot_id is not a diary id. Call check_availability again "
+            "and book only an exact slot_id from the slots list. "
+            "Never invent or reconstruct times or ids."
+        ),
+    }
+
+
 def cancellation_fee_applies(
     appointment_date: str,
     appointment_time: str,
@@ -249,6 +283,8 @@ class MemoryBookingProvider:
             "appointment_type": appointment_type,
             "date_from": start,
             "date_to": end,
+            # Cache refresh passes limit=None for the full 14-day window.
+            # Agent-facing calls keep the default trim.
             "slots": filtered,
         }
         if clinician:

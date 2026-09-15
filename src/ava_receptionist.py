@@ -13,7 +13,7 @@ from livekit.agents import Agent, RunContext, function_tool, get_job_context
 from livekit.plugins import openai
 from openai.types.beta.realtime.session import TurnDetection
 
-from booking import BookingProvider
+from booking import BookingProvider, invalid_slot_id_result, is_canonical_slot_id
 from call_log import CallLog
 from call_state import CallState
 from filler_ladder import FillerLadder, SessionSpeaker
@@ -274,7 +274,9 @@ class AvaReceptionist(Agent):
         branch: str | None = None,
         clinician: str | None = None,
     ) -> dict[str, Any]:
-        """Check real diary availability. Never invent times.
+        """Check real diary availability before offering times. Never invent times.
+
+        Must check before offering any time. Book only an exact slot_id from slots.
 
         Args:
             branch: shellharbour, dapto, or woonona. Default is the caller's branch.
@@ -325,11 +327,13 @@ class AvaReceptionist(Agent):
         patient_id: str | None = None,
         date_of_birth: str | None = None,
     ) -> dict[str, Any]:
-        """Book a slot returned by check_availability. Say confirmed only if confirmed is true.
+        """Book only an exact slot_id from check_availability. Never invent ids.
+
+        Call check_availability first. Say confirmed only if confirmed is true.
 
         Args:
             branch: Clinic id: shellharbour, dapto, or woonona.
-            slot_id: Slot id from check_availability.
+            slot_id: Exact slot_id from the slots list. Never reconstruct one.
             reason: Short reason for the visit.
             name: Caller's name for a new patient.
             mobile: Australian mobile.
@@ -345,6 +349,8 @@ class AvaReceptionist(Agent):
                     "action": "call_000",
                     "note": "Do not book this caller. Escalate. Triple zero if needed.",
                 }
+            if not is_canonical_slot_id(slot_id):
+                return invalid_slot_id_result(slot_id)
             if name:
                 self.state.caller_name = name
             mobile_result = self.state.register_mobile(

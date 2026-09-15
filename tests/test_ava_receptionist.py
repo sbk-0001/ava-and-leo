@@ -119,3 +119,5 @@ def test_agent_builds_call_state_before_speech() -> None:
     assert "call_state ready before speech" in source
     assert "kill_switch" in source
     assert "inbound_greeting_instructions(call_state.branch)" in source
+    assert "is_rate_limit_error" in source
+    assert "RateLimitRecovery" in source

@@ -2,6 +2,8 @@
 
 from datetime import date
 
+import pytest
+
 from call_state import CallState
 from grounding import (
     CONFIRM_SUBSTITUTE,
@@ -9,6 +11,7 @@ from grounding import (
     SAFE_SUBSTITUTE,
     SpeakableFacts,
     gate_utterance,
+    grounded_realtime_transcription,
     ingest_availability,
     ingest_book_result,
 )
@@ -147,3 +150,30 @@ def test_dentist_display_name_is_pinned_from_slot() -> None:
     )
     assert "Dr Pat" not in swapped.spoken
     assert "Dr Mohit Tolani" in swapped.spoken
+
+
+@pytest.mark.asyncio
+async def test_realtime_transcription_yields_substitute_not_ungrounded() -> None:
+    """Captions become the safe line; original confirm/time text is not yielded."""
+    facts = SpeakableFacts()
+    committed: list[str] = []
+    rewrites: list[str] = []
+
+    async def _chunks():
+        yield "You're all set, "
+        yield "you're booked with Dr Maryam."
+
+    async for chunk in grounded_realtime_transcription(
+        _chunks(),
+        facts=facts,
+        commit=lambda text: (
+            committed.append(text) or gate_utterance(text, facts).spoken
+        ),
+        on_rewrite=rewrites.append,
+    ):
+        yielded = chunk
+
+    assert yielded == CONFIRM_SUBSTITUTE
+    assert "Maryam" not in yielded
+    assert rewrites == [CONFIRM_SUBSTITUTE]
+    assert committed[0] == "You're all set, "

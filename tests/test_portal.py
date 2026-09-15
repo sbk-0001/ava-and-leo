@@ -161,6 +161,41 @@ def test_desk_http_bus_rejects_junk() -> None:
     assert http.post("/api/desk/events", json={"nope": True}).status_code == 400
 
 
+def test_desk_http_bus_accepts_grounding_violation() -> None:
+    """Phone worker POSTs grounding_violation; portal used to 400 that type."""
+    from grounding import GateResult, grounding_violation_packet
+
+    http, _practice = _client()
+    queue = http.app.state.desk_bus.subscribe()
+    packet = grounding_violation_packet(
+        GateResult(
+            original="You're booked with Dr Maryam.",
+            spoken="That's not locked yet. Let me have another look.",
+            suppressed=True,
+            violations=["confirm"],
+        ),
+        count=1,
+        branch="shellharbour",
+    )
+    packet["id"] = "desk_grounding_1"
+    packet["room"] = "call-+61400497186"
+    packet["channel"] = "sip"
+    posted = http.post("/api/desk/events", json=packet)
+    assert posted.status_code == 200
+    assert posted.json()["ok"] is True
+    assert queue.get_nowait()["type"] == "grounding_violation"
+
+    transcript = {
+        "type": "transcript",
+        "role": "user",
+        "text": "Hello?",
+        "id": "desk_tx_1",
+        "room": "call-+61400497186",
+        "channel": "sip",
+    }
+    assert http.post("/api/desk/events", json=transcript).status_code == 200
+
+
 def test_desk_stream_requires_sign_in() -> None:
     practice = PracticeClient(mode="mock")
     app = create_app(practice=practice, require_auth=True, portal_password="secret")

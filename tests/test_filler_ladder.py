@@ -287,6 +287,72 @@ async def test_429_retry_success_skips_fallback() -> None:
 
 
 @pytest.mark.asyncio
+async def test_scripted_speech_on_realtime_uses_generate_reply_not_say() -> None:
+    """Production OpenAI Realtime raises if the only path is session.say()."""
+    from types import SimpleNamespace
+
+    from filler_ladder import (
+        REALTIME_SAY_UNSUPPORTED,
+        kick_scripted_speech,
+        session_supports_say,
+        speak_scripted,
+    )
+
+    replies: list[dict] = []
+
+    def say(*_args, **_kwargs):
+        raise RuntimeError(
+            REALTIME_SAY_UNSUPPORTED
+            + "; add a TTS model to AgentSession to enable say()"
+        )
+
+    def generate_reply(**kwargs):
+        replies.append(kwargs)
+        return SimpleNamespace()
+
+    session = SimpleNamespace(
+        tts=None,
+        llm=SimpleNamespace(capabilities=SimpleNamespace(supports_say=False)),
+        say=say,
+        generate_reply=generate_reply,
+    )
+    assert session_supports_say(session) is False
+    spoken = "That's not locked yet. Let me have another look."
+    handle = kick_scripted_speech(session, spoken, kind="script")
+    assert handle is not None
+    await speak_scripted(session, spoken, kind="script")
+    assert replies
+    assert spoken in str(replies[0].get("instructions") or "")
+    assert "diary result" not in str(replies[0].get("instructions") or "").lower()
+
+
+@pytest.mark.asyncio
+async def test_session_speaker_fillers_use_generate_reply_on_realtime() -> None:
+    from types import SimpleNamespace
+
+    from filler_ladder import SessionSpeaker
+
+    replies: list[dict] = []
+
+    def say(*_args, **_kwargs):
+        raise RuntimeError(
+            "trying to generate speech from text without a TTS model or a "
+            "RealtimeSession that supports say()"
+        )
+
+    session = SimpleNamespace(
+        tts=None,
+        llm=SimpleNamespace(capabilities=SimpleNamespace(supports_say=False)),
+        say=say,
+        generate_reply=lambda **kwargs: replies.append(kwargs) or SimpleNamespace(),
+    )
+    speaker = SessionSpeaker(session)
+    await speaker.utter("Just a sec.")
+    assert replies
+    assert "Just a sec." in str(replies[0].get("instructions") or "")
+
+
+@pytest.mark.asyncio
 async def test_empty_ok_path_is_not_error() -> None:
     ladder, _clock, _speaker, _state, _booking = _ladder()
 

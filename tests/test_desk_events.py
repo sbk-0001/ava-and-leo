@@ -10,6 +10,7 @@ import pytest
 from livekit.agents.llm import ChatMessage
 
 from desk_events import (
+    DESK_EVENT_TYPES,
     DESK_TOPIC,
     DIARY_MUTATIONS,
     activity_packet_from_result,
@@ -320,3 +321,7 @@ def test_grounding_violation_packet_is_typed() -> None:
     assert packet["label"] == "GROUNDING_VIOLATION"
     assert packet["payload"]["count"] == 2
     assert packet["payload"]["violations"] == ["time"]
+    assert packet["type"] in DESK_EVENT_TYPES
+    assert "grounding_violation" in DESK_EVENT_TYPES
+    assert "transcript" in DESK_EVENT_TYPES
+    assert "activity" in DESK_EVENT_TYPES

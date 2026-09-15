@@ -30,8 +30,8 @@ from call_log import CallLog
 from call_state import CallState
 from date_context import resolve_date_phrase as resolve_date_phrase_fn
 from desk_events import activity_packet_from_result, schedule_desk_publish
-from filler_ladder import FillerLadder, SessionSpeaker
-from grounding import grounding_violation_packet
+from filler_ladder import FillerLadder, SessionSpeaker, speak_scripted
+from grounding import grounded_realtime_transcription, grounding_violation_packet
 from persona import ava_instructions, get_branch, quote_fee, resolve_tool_branch
 from phrase_pools import STAGE_1
 from realtime_hygiene import maybe_trim_realtime_context
@@ -141,7 +141,10 @@ class AvaReceptionist(Agent):
         self.ambient = ambient
         self.on_desk_event = on_desk_event
         self._desk_tasks: set[asyncio.Task[Any]] = set()
+        self._speech_tasks: set[asyncio.Task[Any]] = set()
         self._active_ladder: FillerLadder | None = None
+        self._scripted_speech = False
+        self._speech_session: Any | None = None
         self.branch = get_branch(state.branch)
         super().__init__(
             instructions=ava_instructions(self.branch.id, state.prompt_block()),
@@ -223,6 +226,49 @@ class AvaReceptionist(Agent):
                 schedule_desk_publish(self._job_room(), packet)
         return gated.spoken
 
+    def _voice_session(self) -> Any:
+        if self._speech_session is not None:
+            return self._speech_session
+        return self.session
+
+    def _on_ungrounded_rewrite(self, spoken: str) -> None:
+        session = self._voice_session()
+        interrupt = getattr(session, "interrupt", None)
+        if callable(interrupt):
+            try:
+                interrupt()
+            except Exception:
+                logger.exception("grounding interrupt failed")
+        self._kick_substitute_speech(spoken)
+
+    def _kick_substitute_speech(self, spoken: str) -> None:
+        """Speak a grounding substitute without blocking transcription_node.
+
+        generate_reply must not be awaited inside the transcription pipeline
+        (re-entrancy). OpenAI Realtime has no session.say().
+        Docs: https://docs.livekit.io/agents/models/realtime/#scripted-speech-output
+        """
+        if self._scripted_speech:
+            return
+        self._scripted_speech = True
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._scripted_speech = False
+            return
+
+        async def _run() -> None:
+            try:
+                await speak_scripted(self._voice_session(), spoken, kind="script")
+            except Exception:
+                logger.exception("grounding substitute speech failed")
+            finally:
+                self._scripted_speech = False
+
+        task = loop.create_task(_run())
+        self._speech_tasks.add(task)
+        task.add_done_callback(self._speech_tasks.discard)
+
     async def tts_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> AsyncIterable[Any]:
@@ -240,22 +286,27 @@ class AvaReceptionist(Agent):
     async def transcription_node(
         self, text: AsyncIterable[str], model_settings: ModelSettings
     ) -> AsyncIterable[str]:
-        """Realtime transcript rewrite. Audio may already be in flight; interrupt + say."""
+        """Rewrite Realtime captions; interrupt ungrounded audio; generate_reply.
+
+        Yielding the substitute updates the published transcript. OpenAI
+        Realtime audio is S2S, so session.say() cannot speak it — use
+        generate_reply after interrupt.
+
+        Docs: https://docs.livekit.io/agents/logic/nodes/
+              https://docs.livekit.io/agents/models/realtime/#scripted-speech-output
+        """
         del model_settings
-        chunks: list[str] = []
-        async for chunk in text:
-            chunks.append(chunk if isinstance(chunk, str) else str(chunk))
-        full = "".join(chunks)
-        spoken = self._gate_speech(full)
-        if spoken != full:
-            try:
-                interrupt = getattr(self.session, "interrupt", None)
-                if callable(interrupt):
-                    interrupt()
-                self.session.say(spoken)
-            except Exception:
-                logger.exception("grounding interrupt/say failed")
-        yield spoken
+        if self._scripted_speech:
+            async for chunk in text:
+                yield chunk if isinstance(chunk, str) else str(chunk)
+            return
+        async for chunk in grounded_realtime_transcription(
+            text,
+            facts=self.state.speakable,
+            commit=self._gate_speech,
+            on_rewrite=self._on_ungrounded_rewrite,
+        ):
+            yield chunk
 
     async def _cover(self, context: RunContext) -> None:
         """Stage-1 filler only. Prefer _dispatch_with_ladder so audio precedes the network."""
@@ -308,9 +359,12 @@ class AvaReceptionist(Agent):
             await self._active_ladder.on_caller_speech()
         if self.state.urgency_level == "emergency_000":
             try:
-                await self.session.say(EMERGENCY_000_SCRIPT, allow_interruptions=False)
-            except TypeError:
-                await self.session.say(EMERGENCY_000_SCRIPT)
+                await speak_scripted(
+                    self._voice_session(),
+                    EMERGENCY_000_SCRIPT,
+                    allow_interruptions=False,
+                    kind="script",
+                )
             except Exception:
                 logger.exception("emergency 000 script failed")
             if StopResponse is not None:

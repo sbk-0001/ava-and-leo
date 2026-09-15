@@ -25,7 +25,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from desk_events import DeskBus
+from desk_events import DESK_EVENT_TYPES, DeskBus
 from persona import BRANCHES, branch_as_dict, get_branch
 from practice import PracticeClient, get_shared_practice
 
@@ -348,13 +348,10 @@ def create_app(
             packet = await request.json()
         except Exception as exc:
             raise HTTPException(status_code=400, detail="Invalid JSON.") from exc
-        if not isinstance(packet, dict) or packet.get("type") not in {
-            "transcript",
-            "activity",
-        }:
+        if not isinstance(packet, dict) or packet.get("type") not in DESK_EVENT_TYPES:
             raise HTTPException(
                 status_code=400,
-                detail="Expected a desk transcript or activity packet.",
+                detail="Expected a desk transcript, activity, or grounding_violation packet.",
             )
         app.state.desk_bus.publish(packet)
         return {"ok": True}

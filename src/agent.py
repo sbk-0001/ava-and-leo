@@ -30,7 +30,7 @@ from ambient import AmbientBed
 from ava_receptionist import AvaReceptionist, inbound_greeting_instructions
 from availability_cache import CachedBookingProvider
 from backchannel import attach_backchannels
-from booking import get_shared_booking_provider
+from booking import apply_job_booking_overrides, get_shared_booking_provider
 from call_log import CallLog, iso, log_dir_from_env, supabase_turn_row
 from call_state import CallState, kill_switch_enabled
 from persona import CANONICAL_PERSONAS, canonical_persona, get_branch, resolve_persona
@@ -563,13 +563,14 @@ async def my_agent(ctx: JobContext):
     if persona_key == "ava":
         _require_env(AVA_ENV_VARS)
         inner_booking = get_shared_booking_provider(is_telephony=is_telephony)
-        booking = CachedBookingProvider(inner_booking)
+        cached_booking = CachedBookingProvider(inner_booking)
         try:
-            await booking.prewarm()
+            await cached_booking.prewarm()
         except Exception:
             logger.exception("availability cache prewarm failed")
+        booking = apply_job_booking_overrides(cached_booking, metadata)
         cache_stop = asyncio.Event()
-        cache_task = asyncio.create_task(booking.run_refresh_loop(cache_stop))
+        cache_task = asyncio.create_task(cached_booking.run_refresh_loop(cache_stop))
         transfer_to = os.getenv("SIP_TRANSFER_TO", "").strip() or None
         ambient = AmbientBed()
         agent: Agent = AvaReceptionist(

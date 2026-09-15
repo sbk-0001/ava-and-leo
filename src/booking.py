@@ -17,7 +17,7 @@ from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from persona import get_branch
-from practice import PracticeClient, get_shared_practice, practice_from_env
+from practice import Booking, PracticeClient, get_shared_practice, practice_from_env
 
 logger = logging.getLogger("booking")
 
@@ -459,6 +459,126 @@ class TimeoutBookingProvider:
         return await self._call(
             "take_message", lambda: self.inner.take_message(**kwargs)
         )
+
+
+class ToolPacingProvider:
+    """Force a slow or hanging diary lookup so the filler ladder can be heard.
+
+    Wrap *outside* the availability cache so a cache hit still takes the
+    requested time. Hang returns timeout after `lookup_hang_s` without slots.
+    """
+
+    def __init__(
+        self,
+        inner: BookingProvider,
+        *,
+        lookup_delay_s: float = 0.0,
+        lookup_hang_s: float = 0.0,
+    ) -> None:
+        self.inner = inner
+        self.lookup_delay_s = float(lookup_delay_s or 0.0)
+        self.lookup_hang_s = float(lookup_hang_s or 0.0)
+        self.name = getattr(inner, "name", "paced")
+
+    async def check_availability(self, **kwargs: Any) -> dict[str, Any]:
+        if self.lookup_hang_s > 0:
+            await asyncio.sleep(self.lookup_hang_s)
+            return {
+                "ok": False,
+                "reason": "timeout",
+                "action": "check_availability",
+                "note": (
+                    "The diary did not come back. Stay in character. Do not invent "
+                    "a slot. Offer to take a message or transfer."
+                ),
+            }
+        if self.lookup_delay_s > 0:
+            await asyncio.sleep(self.lookup_delay_s)
+        return await self.inner.check_availability(**kwargs)
+
+    async def book_appointment(self, **kwargs: Any) -> dict[str, Any]:
+        return await self.inner.book_appointment(**kwargs)
+
+    async def reschedule_appointment(self, **kwargs: Any) -> dict[str, Any]:
+        return await self.inner.reschedule_appointment(**kwargs)
+
+    async def cancel_appointment(self, **kwargs: Any) -> dict[str, Any]:
+        return await self.inner.cancel_appointment(**kwargs)
+
+    async def lookup_patient(self, **kwargs: Any) -> dict[str, Any]:
+        return await self.inner.lookup_patient(**kwargs)
+
+    async def take_message(self, **kwargs: Any) -> dict[str, Any]:
+        return await self.inner.take_message(**kwargs)
+
+
+def unwrap_practice_client(provider: Any) -> PracticeClient | None:
+    current: Any = provider
+    for _ in range(8):
+        if current is None:
+            return None
+        client = getattr(current, "client", None)
+        if isinstance(client, PracticeClient):
+            return client
+        current = getattr(current, "inner", None)
+    return None
+
+
+def seed_inside_24h_booking(
+    client: PracticeClient | None,
+    *,
+    now: datetime | None = None,
+) -> Booking | None:
+    """Seed Priya Nair with a booking that triggers the $50 cancel fee."""
+    if client is None:
+        return None
+    current = now or datetime.now(SYDNEY)
+    when = current + timedelta(hours=12)
+    client.seed_patient(
+        patient_id="pat_priya_ns",
+        name="Priya Nair",
+        phone="0413000222",
+    )
+    slot_id = "slot_priya_ns_24h"
+    client.seed_slot(
+        slot_id=slot_id,
+        branch_id="shellharbour",
+        date=when.date().isoformat(),
+        time=when.strftime("%H:%M"),
+        clinician="Dr Mohit Tolani",
+        taken=True,
+    )
+    booking = Booking(
+        booking_id="bkg_priya_ns",
+        slot_id=slot_id,
+        branch_id="shellharbour",
+        patient_id="pat_priya_ns",
+        date=when.date().isoformat(),
+        time=when.strftime("%H:%M"),
+        clinician="Dr Mohit Tolani",
+        reason="check-up",
+    )
+    client.bookings[booking.booking_id] = booking
+    client.save()
+    return booking
+
+
+def apply_job_booking_overrides(
+    booking: BookingProvider,
+    metadata: Mapping[str, Any] | None,
+    *,
+    env: Mapping[str, str] | None = None,
+) -> BookingProvider:
+    """Per-call delay / hang / 24h cancel seed from agent job metadata."""
+    del env
+    meta = metadata or {}
+    if meta.get("seed_cancel_24h"):
+        seed_inside_24h_booking(unwrap_practice_client(booking))
+    delay = float(meta.get("booking_delay_s") or 0)
+    hang = float(meta.get("booking_hang_s") or 0)
+    if delay > 0 or hang > 0:
+        return ToolPacingProvider(booking, lookup_delay_s=delay, lookup_hang_s=hang)
+    return booking
 
 
 def booking_provider_from_env(

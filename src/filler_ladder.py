@@ -286,7 +286,7 @@ def offset_with_jitter(
 
 
 class SessionSpeaker:
-    """Play fillers from the pre-rendered bank. Never say() / generate_reply.
+    """Play fillers from the pre-rendered bank. Never TTS or the Realtime model.
 
     Docs: https://docs.livekit.io/agents/multimodality/audio/background-audio.md
     """

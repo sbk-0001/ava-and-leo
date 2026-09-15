@@ -12,10 +12,10 @@ Docs: https://docs.livekit.io/agents/multimodality/audio/background-audio.md
 from __future__ import annotations
 
 import asyncio
-import audioop
 import inspect
 import logging
 import time
+from array import array
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
@@ -53,7 +53,12 @@ def apply_gain(pcm: bytes, gain: float) -> bytes:
         return pcm
     if gain <= 0.0:
         return b"\x00" * len(pcm)
-    return audioop.mul(pcm, 2, gain)
+    samples = array("h")
+    samples.frombytes(pcm)
+    scaled = array(
+        "h", (int(max(-32767, min(32767, sample * gain))) for sample in samples)
+    )
+    return scaled.tobytes()
 
 
 class FillerPlayer:
@@ -160,9 +165,7 @@ class FillerPlayer:
         except Exception:
             return False
 
-        source: Any = (
-            str(clip.path) if clip.path.is_file() else self._frame_iter(clip)
-        )
+        source: Any = str(clip.path) if clip.path.is_file() else self._frame_iter(clip)
 
         try:
             handle = play(AudioConfig(source, volume=1.0, fade_out=DUCK_S))
@@ -210,10 +213,14 @@ class FillerPlayer:
 
     async def _mix_playout(self, clip: FillerClip) -> None:
         mixed = bytearray()
+        samples_since_model = 0
         for chunk in pcm_frames(clip.pcm, sample_rate=clip.sample_rate):
             elapsed_model = 0.0
             if self._model_audio_at is not None:
-                elapsed_model = self.clock() - self._model_audio_at
+                elapsed_wall = self.clock() - self._model_audio_at
+                elapsed_samples = samples_since_model / float(clip.sample_rate)
+                elapsed_model = max(elapsed_wall, elapsed_samples)
+                samples_since_model += max(1, len(chunk) // 2)
             gain = duck_gain(elapsed_model)
             self.gains.append(gain)
             mixed.extend(apply_gain(chunk, gain))

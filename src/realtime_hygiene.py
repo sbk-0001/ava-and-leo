@@ -209,7 +209,7 @@ class RateLimitRecovery:
         return pool[0]
 
     async def _play_cover(self, session: Any, text: str) -> None:
-        """Predetermined cover from the filler bank — never generate_reply."""
+        """Predetermined cover from the filler bank — never the Realtime model."""
         player = self._player or getattr(session, "_filler_player", None)
         if player is not None:
             play = getattr(player, "play", None)

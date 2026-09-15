@@ -400,7 +400,7 @@ class CallState:
             "- New booking: no DOB required. Discuss/move/cancel existing: DOB required.\n"
             "- Do not volunteer existing appointment, dentist, or treatment detail "
             "until dob_verified is true.\n"
-            "- Failed DOB: offer a callback. Do not say DOB was wrong. "
+            "- Failed DOB: offer a callback. Do not mention date of birth. "
             "Do not confirm or deny a record."
         )
 
@@ -422,8 +422,8 @@ class CallState:
                 "ok": False,
                 "reason": "verification_failed",
                 "note": (
-                    "Offer to have the team call back. Do not say the date of birth "
-                    "was wrong. Do not confirm or deny a record."
+                    "Offer to have the team call back. Do not mention date of birth. "
+                    "Do not confirm or deny a record."
                 ),
             }
         return {
@@ -462,8 +462,8 @@ class CallState:
             "ok": False,
             "reason": "verification_failed",
             "note": (
-                "Offer to have the team call back. Do not say the date of birth "
-                "was wrong. Do not confirm or deny a record."
+                "Offer to have the team call back. Do not mention date of birth. "
+                "Do not confirm or deny a record."
             ),
         }
 

@@ -839,7 +839,7 @@ class AvaReceptionist(Agent):
         """Verify DOB before discussing, moving, or cancelling an existing appointment.
 
         New bookings do not need this. Failed verification: offer a callback.
-        Do not say the date of birth was wrong. Do not confirm or deny a record.
+        Do not mention date of birth. Do not confirm or deny a record.
 
         Args:
             date_of_birth: Date of birth as spoken, preferably YYYY-MM-DD.

@@ -193,7 +193,7 @@ async def test_practice_tools_notify_desk_including_booking_failures(
         on_desk_event=events.append,
     )
 
-    async def _run_only(self, context, factory):
+    async def _run_only(self, context, factory, **_kwargs):
         return await factory()
 
     monkeypatch.setattr(AvaReceptionist, "_dispatch_with_ladder", _run_only)
@@ -226,6 +226,7 @@ async def test_practice_tools_notify_desk_including_booking_failures(
     assert invented["confirmed"] is False
     assert "not locked" in invented["say"].lower()
     assert ava.state.may_confirm_booking() is False
+    ava.state.dob_verified = True
     moved = await ava.reschedule_appointment(
         dummy, booking_id=booked["booking_id"], new_slot_id="missing"
     )
@@ -284,7 +285,7 @@ async def test_book_appointment_slot_gone_is_not_verbally_confirmed(
         on_desk_event=events.append,
     )
 
-    async def _run_only(self, context, factory):
+    async def _run_only(self, context, factory, **_kwargs):
         return await factory()
 
     monkeypatch.setattr(AvaReceptionist, "_dispatch_with_ladder", _run_only)
@@ -320,7 +321,7 @@ async def test_check_availability_uses_preferred_clinician(monkeypatch) -> None:
     state.observe_user_text("I'd like Dr Mohit please")
     ava = AvaReceptionist(state=state, booking=MemoryBookingProvider(practice))
 
-    async def _run_only(self, context, factory):
+    async def _run_only(self, context, factory, **_kwargs):
         return await factory()
 
     monkeypatch.setattr(AvaReceptionist, "_dispatch_with_ladder", _run_only)
@@ -348,7 +349,7 @@ async def test_empty_tool_args_are_rejected(monkeypatch) -> None:
         booking=MemoryBookingProvider(PracticeClient(mode="mock")),
     )
 
-    async def _run_only(self, context, factory):
+    async def _run_only(self, context, factory, **_kwargs):
         return await factory()
 
     monkeypatch.setattr(AvaReceptionist, "_dispatch_with_ladder", _run_only)

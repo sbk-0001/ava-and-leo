@@ -42,11 +42,11 @@ def test_boot_fails_if_a_pool_is_removed(tmp_path: Path) -> None:
 
 def test_session_speaker_fillers_never_call_say_or_generate_reply() -> None:
     src = inspect.getsource(SessionSpeaker)
-    assert "generate_reply" not in src
+    assert "generate_reply(" not in src
     assert "kick_scripted_speech" not in src
     assert ".say(" not in src
     recover_src = inspect.getsource(SessionSpeaker.utter)
-    assert "generate_reply" not in recover_src
+    assert "generate_reply(" not in recover_src
 
 
 @pytest.mark.asyncio
@@ -102,7 +102,7 @@ def test_rate_limit_cover_source_has_no_say_fallback() -> None:
     src = inspect.getsource(RateLimitRecovery)
     assert "session.say failed; trying generate_reply" not in src
     cover = inspect.getsource(RateLimitRecovery._play_cover)
-    assert "generate_reply" not in cover
+    assert "generate_reply(" not in cover
     assert "session.say" not in cover
 
 

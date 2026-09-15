@@ -217,8 +217,7 @@ def test_backend_instructions_policy_intact() -> None:
     assert "Barrack Heights" in text
     assert "location" in lowered
     assert "availability" in lowered
-    assert "Debto" not in text
-    assert "Winona" not in text
+    assert "Never say Debto or Winona" in text
     assert "group number" in lowered or "not a single clinic" in lowered
     _assert_no_retired_group_names(text)
 

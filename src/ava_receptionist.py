@@ -16,7 +16,9 @@ from openai.types.beta.realtime.session import TurnDetection
 from booking import BookingProvider
 from call_log import CallLog
 from call_state import CallState
+from filler_ladder import FillerLadder, SessionSpeaker
 from persona import ava_instructions, get_branch, quote_fee, resolve_tool_branch
+from phrase_pools import STAGE_1
 from realtime_hygiene import maybe_trim_realtime_context
 from sip_utils import find_sip_participant
 
@@ -29,14 +31,6 @@ AVA_DEFAULT_VOICE = "marin"
 AVA_VAD_SILENCE_MS = 500
 AVA_SPEECH_SPEED = 0.9
 AVA_TEMPERATURE = 0.95
-
-FILLER_INSTRUCTIONS = (
-    "Cover the pause while you look something up. One short spoken line, "
-    "Australian, in character. Examples from your instructions: "
-    "Let me just have a look for ya... doo doo doo... "
-    "or Righto, pulling up the diary — bit slow this morning, bear with me. "
-    "Never go silent. Do not invent a result yet."
-)
 
 
 def resolve_ava_voice(env: Mapping[str, str] | None = None) -> str:
@@ -109,11 +103,14 @@ class AvaReceptionist(Agent):
         booking: BookingProvider,
         transfer_to: str | None = None,
         call_log: CallLog | None = None,
+        ambient: Any | None = None,
     ) -> None:
         self.state = state
         self.booking = booking
         self.transfer_to = transfer_to
         self.call_log = call_log
+        self.ambient = ambient
+        self._active_ladder: FillerLadder | None = None
         self.branch = get_branch(state.branch)
         super().__init__(
             instructions=ava_instructions(self.branch.id, state.prompt_block()),
@@ -137,11 +134,44 @@ class AvaReceptionist(Agent):
             )
 
     async def _cover(self, context: RunContext) -> None:
-        """Fire filler speech the same turn as the tool — no dead air."""
+        """Stage-1 filler only. Prefer _dispatch_with_ladder so audio precedes the network."""
         try:
-            await context.session.generate_reply(instructions=FILLER_INSTRUCTIONS)
+            speaker = SessionSpeaker(context.session)
+            line = self.state.pick_phrase("stage_1", STAGE_1)
+            await speaker.utter(line)
         except Exception:
             logger.exception("filler speech failed; continuing tool")
+
+    async def _dispatch_with_ladder(
+        self,
+        context: RunContext,
+        factory: Any,
+    ) -> dict[str, Any]:
+        """Speak stage-1 audio, then run the tool. Ladder covers the wait."""
+        speaker = SessionSpeaker(context.session)
+        ladder = FillerLadder(self.state, speaker=speaker, booking=self.booking)
+        self._active_ladder = ladder
+        if self.ambient is not None:
+            try:
+                self.ambient.play_keyboard()
+            except Exception:
+                logger.exception("keyboard clatter failed")
+        try:
+            result, trace = await ladder.dispatch(factory)
+            logger.info(
+                "first-audio-ts=%s tool-dispatch-ts=%s audio_before_dispatch=%s",
+                trace.first_audio_ts,
+                trace.tool_dispatch_ts,
+                trace.audio_before_dispatch,
+            )
+            return dict(result)
+        finally:
+            self._active_ladder = None
+            if self.ambient is not None:
+                try:
+                    self.ambient.stop_keyboard()
+                except Exception:
+                    logger.exception("keyboard stop failed")
 
     async def on_user_turn_completed(self, turn_ctx: Any, new_message: Any) -> None:
         self.state.turn_count += 1
@@ -149,6 +179,8 @@ class AvaReceptionist(Agent):
         self.state.observe_user_text(text)
         if self.call_log is not None and text:
             self.call_log.add_turn(role="user", content=text)
+        if self._active_ladder is not None:
+            await self._active_ladder.on_caller_speech()
         try:
             await self.update_instructions(
                 ava_instructions(self.state.branch, self.state.prompt_block())
@@ -248,29 +280,31 @@ class AvaReceptionist(Agent):
             appointment_type: check-up, emergency, existing, whitening, etc.
             date_range: YYYY-MM-DD, YYYY-MM-DD/YYYY-MM-DD, today, tomorrow, or this week.
         """
-        await self._cover(context)
-        clinic_id = self._select_branch(branch)
-        if not self.state.may_book():
-            result = {
-                "ok": False,
-                "reason": "do_not_book",
-                "action": "call_000",
-                "note": (
-                    "Life-threatening presentation. Do not book. Tell them to call "
-                    "triple zero or go to Shellharbour or Wollongong Hospital emergency."
-                ),
-            }
-            self._log_tool("check_availability", result)
+
+        async def _run() -> dict[str, Any]:
+            clinic_id = self._select_branch(branch)
+            if not self.state.may_book():
+                return {
+                    "ok": False,
+                    "reason": "do_not_book",
+                    "action": "call_000",
+                    "note": (
+                        "Life-threatening presentation. Do not book. Tell them to call "
+                        "triple zero or go to Shellharbour or Wollongong Hospital emergency."
+                    ),
+                }
+            self.state.appointment_type = appointment_type
+            result = await self.booking.check_availability(
+                branch=clinic_id,
+                appointment_type=appointment_type,
+                date_range=date_range,
+            )
+            if result.get("ok") and result.get("slots"):
+                first = result["slots"][0]
+                self.state.proposed_slot = first.get("slot_id")
             return result
-        self.state.appointment_type = appointment_type
-        result = await self.booking.check_availability(
-            branch=clinic_id,
-            appointment_type=appointment_type,
-            date_range=date_range,
-        )
-        if result.get("ok") and result.get("slots"):
-            first = result["slots"][0]
-            self.state.proposed_slot = first.get("slot_id")
+
+        result = await self._dispatch_with_ladder(context, _run)
         self._log_tool("check_availability", result)
         return result
 
@@ -297,35 +331,38 @@ class AvaReceptionist(Agent):
             patient_id: Patient id from lookup_patient, if known.
             date_of_birth: Date of birth if given, preferably YYYY-MM-DD.
         """
-        await self._cover(context)
-        if not self.state.may_book():
-            result = {
-                "ok": False,
-                "reason": "do_not_book",
-                "action": "call_000",
-                "note": "Do not book this caller. Escalate. Triple zero if needed.",
-            }
-            self._log_tool("book_appointment", result)
-            return result
-        if name:
-            self.state.caller_name = name
-        mobile_result = self.state.register_mobile(mobile or self.state.caller_mobile)
-        if not mobile_result.get("ok") and not patient_id:
-            self._log_tool("book_appointment", mobile_result)
-            return mobile_result
-        clinic_id = self._select_branch(branch)
-        result = await self.booking.book_appointment(
-            branch=clinic_id,
-            slot_id=slot_id,
-            reason=reason,
-            patient_id=patient_id,
-            name=name or self.state.caller_name,
-            mobile=self.state.caller_mobile,
-            date_of_birth=date_of_birth,
-        )
-        if result.get("confirmed"):
-            self.state.confirmed_slot = slot_id
-            self.state.intent = "booked"
+
+        async def _run() -> dict[str, Any]:
+            if not self.state.may_book():
+                return {
+                    "ok": False,
+                    "reason": "do_not_book",
+                    "action": "call_000",
+                    "note": "Do not book this caller. Escalate. Triple zero if needed.",
+                }
+            if name:
+                self.state.caller_name = name
+            mobile_result = self.state.register_mobile(
+                mobile or self.state.caller_mobile
+            )
+            if not mobile_result.get("ok") and not patient_id:
+                return mobile_result
+            clinic_id = self._select_branch(branch)
+            booked = await self.booking.book_appointment(
+                branch=clinic_id,
+                slot_id=slot_id,
+                reason=reason,
+                patient_id=patient_id,
+                name=name or self.state.caller_name,
+                mobile=self.state.caller_mobile,
+                date_of_birth=date_of_birth,
+            )
+            if booked.get("confirmed"):
+                self.state.confirmed_slot = slot_id
+                self.state.intent = "booked"
+            return booked
+
+        result = await self._dispatch_with_ladder(context, _run)
         self._log_tool("book_appointment", result)
         return result
 
@@ -342,13 +379,17 @@ class AvaReceptionist(Agent):
             booking_id: Existing booking id.
             new_slot_id: New slot id from check_availability.
         """
-        await self._cover(context)
-        self.state.intent = "reschedule"
-        result = await self.booking.reschedule_appointment(
-            booking_id=booking_id, new_slot_id=new_slot_id
-        )
-        if result.get("confirmed"):
-            self.state.confirmed_slot = new_slot_id
+
+        async def _run() -> dict[str, Any]:
+            self.state.intent = "reschedule"
+            moved = await self.booking.reschedule_appointment(
+                booking_id=booking_id, new_slot_id=new_slot_id
+            )
+            if moved.get("confirmed"):
+                self.state.confirmed_slot = new_slot_id
+            return moved
+
+        result = await self._dispatch_with_ladder(context, _run)
         self._log_tool("reschedule_appointment", result)
         return result
 
@@ -363,14 +404,18 @@ class AvaReceptionist(Agent):
         Args:
             booking_id: Existing booking id.
         """
-        await self._cover(context)
-        self.state.intent = "cancel"
-        result = await self.booking.cancel_appointment(booking_id=booking_id)
-        if result.get("fee_applies"):
-            result["say"] = (
-                "There is a fifty dollar fee for inside twenty-four hours, "
-                "just so you're not surprised by it. You cannot waive it."
-            )
+
+        async def _run() -> dict[str, Any]:
+            self.state.intent = "cancel"
+            cancelled = await self.booking.cancel_appointment(booking_id=booking_id)
+            if cancelled.get("fee_applies"):
+                cancelled["say"] = (
+                    "There is a fifty dollar fee for inside twenty-four hours, "
+                    "just so you're not surprised by it. You cannot waive it."
+                )
+            return cancelled
+
+        result = await self._dispatch_with_ladder(context, _run)
         self._log_tool("cancel_appointment", result)
         return result
 
@@ -381,21 +426,24 @@ class AvaReceptionist(Agent):
         Args:
             mobile: Australian mobile number as spoken.
         """
-        await self._cover(context)
-        mobile_result = self.state.register_mobile(mobile)
-        if not mobile_result.get("ok"):
-            self._log_tool("lookup_patient", mobile_result)
-            return mobile_result
-        result = await self.booking.lookup_patient(
-            mobile=self.state.caller_mobile or mobile
-        )
-        if result.get("is_existing_patient"):
-            self.state.is_existing_patient = True
-            patients = result.get("patients") or []
-            if patients and not self.state.caller_name:
-                self.state.caller_name = patients[0].get("name")
-        elif result.get("ok"):
-            self.state.is_existing_patient = False
+
+        async def _run() -> dict[str, Any]:
+            mobile_result = self.state.register_mobile(mobile)
+            if not mobile_result.get("ok"):
+                return mobile_result
+            looked = await self.booking.lookup_patient(
+                mobile=self.state.caller_mobile or mobile
+            )
+            if looked.get("is_existing_patient"):
+                self.state.is_existing_patient = True
+                patients = looked.get("patients") or []
+                if patients and not self.state.caller_name:
+                    self.state.caller_name = patients[0].get("name")
+            elif looked.get("ok"):
+                self.state.is_existing_patient = False
+            return looked
+
+        result = await self._dispatch_with_ladder(context, _run)
         self._log_tool("lookup_patient", result)
         return result
 
@@ -406,12 +454,16 @@ class AvaReceptionist(Agent):
         Args:
             service: Treatment or item the caller asked about.
         """
-        await self._cover(context)
-        result = quote_fee(service, self.state.branch)
-        if result.get("status") == "unknown" or not result.get("ok"):
-            result["note"] = (
-                "Fee unknown. Do not guess. Offer to have the team call back."
-            )
+
+        async def _run() -> dict[str, Any]:
+            quoted = quote_fee(service, self.state.branch)
+            if quoted.get("status") == "unknown" or not quoted.get("ok"):
+                quoted["note"] = (
+                    "Fee unknown. Do not guess. Offer to have the team call back."
+                )
+            return quoted
+
+        result = await self._dispatch_with_ladder(context, _run)
         self._log_tool("quote_fee", result)
         return result
 
@@ -432,21 +484,25 @@ class AvaReceptionist(Agent):
             mobile: Call-back number.
             reason: Why they rang.
         """
-        await self._cover(context)
-        if name:
-            self.state.caller_name = name
-        mobile_result = self.state.register_mobile(mobile)
-        stored_mobile = self.state.caller_mobile or mobile or ""
-        if mobile_result.get("stop_asking") and not self.state.caller_mobile:
-            stored_mobile = mobile or ""
-        clinic_id = self._select_branch(branch)
-        result = await self.booking.take_message(
-            branch=clinic_id,
-            name=name,
-            mobile=stored_mobile,
-            reason=reason,
-        )
-        self.state.intent = "message"
+
+        async def _run() -> dict[str, Any]:
+            if name:
+                self.state.caller_name = name
+            mobile_result = self.state.register_mobile(mobile)
+            stored_mobile = self.state.caller_mobile or mobile or ""
+            if mobile_result.get("stop_asking") and not self.state.caller_mobile:
+                stored_mobile = mobile or ""
+            clinic_id = self._select_branch(branch)
+            left = await self.booking.take_message(
+                branch=clinic_id,
+                name=name,
+                mobile=stored_mobile,
+                reason=reason,
+            )
+            self.state.intent = "message"
+            return left
+
+        result = await self._dispatch_with_ladder(context, _run)
         self._log_tool("take_message", result)
         return result
 

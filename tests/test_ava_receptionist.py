@@ -40,7 +40,9 @@ def test_required_tools_are_present() -> None:
     assert "TransferSIPParticipantRequest" in source
     assert "DeleteRoomRequest" in source
     assert "_cover" in source
+    assert "_dispatch_with_ladder" in source
     assert "generate_reply" in source
+    assert "first-audio-ts" in source
 
 
 def test_inbound_greeting_is_the_mapped_branch() -> None:
@@ -125,3 +127,7 @@ def test_agent_builds_call_state_before_speech() -> None:
     assert "inbound_greeting_instructions(call_state.branch)" in source
     assert "is_rate_limit_error" in source
     assert "RateLimitRecovery" in source
+    assert "CachedBookingProvider" in source
+    assert "AmbientBed" in source
+    assert "attach_backchannels" in source
+    assert "mark_interrupted" in source

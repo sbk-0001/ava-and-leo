@@ -23,10 +23,12 @@ Spoken identity is the **verbatim** block in [`src/instructions/ava_receptionist
 
 Ava stays on OpenAI Realtime speech-to-speech (`marin`). Settings aimed at human, interruptible phone turns (verified against [OpenAI Realtime turn detection](https://docs.livekit.io/agents/models/realtime/plugins/openai/#turn-detection) and [interruption in realtime mode](https://docs.livekit.io/agents/logic/turns/#interruption-in-realtime-mode)):
 
-- **Server VAD** with `silence_duration_ms=500` (450–550ms window) and `interrupt_response=True` so the caller can cut her off mid-word
+- **Server VAD** with `silence_duration_ms=500` (450–550ms window) and `interrupt_response=True` so the caller can cut her off mid-word (target: Ava stops in under 100ms). Resume with a pooled "sorry, go on" / "yep yep, sorry" — never restart the cut-off sentence
 - Speech rate `speed=0.9`; temperature `0.95` (0.9–1.0)
 - `AgentSession` `turn_detection="realtime_llm"` with interruptions enabled
-- Every tool call fires a filler utterance the same turn (`generate_reply` cover speech) so there is no dead air
+- **Never-silent tools:** stage-1 filler audio starts *before* the diary network call (`first-audio-ts` < `tool-dispatch-ts`). A code timer then ladders more fillers at 1.2s / 3s / 6s / 12s. Stage 5 is a real `take_message` fallback, not just a line
+- 14-day availability cache per branch, refreshed every 2–3 minutes; `check_availability` is cache-first; books re-verify live
+- Quiet office bed at about −47.5 dBFS plus keyboard clatter while a tool runs; backchannels ("mm", "yep") on a side channel while the caller talks
 - After ~20 Realtime conversation items, older turns are truncated (`ChatContext.truncate` + `update_chat_ctx`). **`CallState` (branch, name, mobile, booking) is not wiped** — it is re-injected as instructions and as a compact recap
 - On `rate_limit_exceeded`, Ava covers ("just a sec"), trims, and retries with backoff instead of hanging silent
 - Target: under 800ms to first audio each turn
@@ -172,9 +174,10 @@ On outbound, Ava waits for the callee to speak first. On inbound, Ava greets as 
 ## Tests
 
 ```bash
-uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py tests/test_room_options.py tests/test_call_state.py tests/test_booking.py tests/test_instructions.py tests/test_call_log.py tests/test_demo_harness.py tests/test_realtime_hygiene.py -v
+uv run pytest tests/test_persona.py tests/test_fees.py tests/test_practice.py tests/test_sip.py tests/test_make_call.py tests/test_ava_receptionist.py tests/test_portal.py tests/test_room_options.py tests/test_call_state.py tests/test_booking.py tests/test_instructions.py tests/test_call_log.py tests/test_demo_harness.py tests/test_realtime_hygiene.py tests/test_filler_ladder.py tests/test_availability_cache.py tests/test_phrase_pools.py tests/test_never_silent.py -v
 uv run pytest            # includes generic-pipeline evals; needs LIVEKIT_* in CI
 uv run python src/demo_harness.py   # writes demos/thursday/*.md
+uv run python src/never_silent_harness.py  # metrics for 8 never-silent scenarios
 ```
 
 Thursday demo transcripts (scripted harness, tools are real): [`demos/thursday/`](demos/thursday/).
@@ -184,20 +187,26 @@ Thursday demo transcripts (scripted harness, tools are real): [`demos/thursday/`
 ```
 src/agent.py                         # entrypoint: DID → CallState before speech
 src/instructions/ava_receptionist.md # verbatim session instructions
-src/call_state.py                    # branch, asks, urgency, kill-switch
+src/call_state.py                    # branch, asks, urgency, kill-switch, phrase pools
 src/booking.py                       # BookingProvider + memory + Zavy360 stub
+src/availability_cache.py            # 14-day cache-first availability
+src/filler_ladder.py                 # speak-before-dispatch + 0/1.2/3/6/12s fillers
+src/ambient.py                       # office bed + keyboard
+src/backchannel.py                   # mm/yep while the caller talks
 src/persona.py                       # brief-only facts + fee table + instruction loader
 src/ava_receptionist.py              # tools (availability, book, cancel+$50, transfer, end_call)
 src/realtime_hygiene.py              # Realtime context trim + TPM rate-limit recovery
 src/call_log.py                      # timestamped replayable transcripts
 src/practice.py                      # in-memory diary used by memory provider + portal
 src/demo_harness.py                  # Thursday scenarios without live SIP
+src/never_silent_harness.py          # 8-scenario metrics (+ live audio if secrets exist)
 src/portal.py / portal_static/       # staff desk
 src/run_local.py                     # one-command agent + portal
 src/sip_utils.py                     # DID map, disconnect handling
 src/make_call.py                     # outbound dispatch + SIP dial
 docs/zavy360.md                      # API investigation notes
 demos/thursday/                      # scenario transcripts
+demos/never-silent/                  # never-silent metrics + recording scaffold
 ```
 
 ## Docs

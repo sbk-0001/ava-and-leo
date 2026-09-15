@@ -26,7 +26,10 @@ from livekit.agents import (
 from livekit.agents.llm import ChatMessage
 from livekit.plugins import assemblyai, cartesia, groq
 
+from ambient import AmbientBed
 from ava_receptionist import AvaReceptionist, inbound_greeting_instructions
+from availability_cache import CachedBookingProvider
+from backchannel import attach_backchannels
 from booking import get_shared_booking_provider
 from call_log import CallLog, iso, log_dir_from_env, supabase_turn_row
 from call_state import CallState, kill_switch_enabled
@@ -559,21 +562,34 @@ async def my_agent(ctx: JobContext):
 
     if persona_key == "ava":
         _require_env(AVA_ENV_VARS)
-        booking = get_shared_booking_provider(is_telephony=is_telephony)
+        inner_booking = get_shared_booking_provider(is_telephony=is_telephony)
+        booking = CachedBookingProvider(inner_booking)
+        try:
+            await booking.prewarm()
+        except Exception:
+            logger.exception("availability cache prewarm failed")
+        cache_stop = asyncio.Event()
+        cache_task = asyncio.create_task(booking.run_refresh_loop(cache_stop))
         transfer_to = os.getenv("SIP_TRANSFER_TO", "").strip() or None
+        ambient = AmbientBed()
         agent: Agent = AvaReceptionist(
             state=call_state,
             booking=booking,
             transfer_to=transfer_to,
             call_log=call_log,
+            ambient=ambient,
         )
         # OpenAI Realtime is speech-to-speech; no AssemblyAI/Groq/Cartesia pipeline.
         # Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/
         session = _build_ava_session()
+        attach_backchannels(session, call_state)
     else:
         _require_env(GENERIC_ENV_VARS)
         agent = Assistant()
         session = _build_generic_session(persona["voice_id"])
+        ambient = None
+        cache_stop = None
+        cache_task = None
 
     _register_latency_logging(session)
     rate_limit = RateLimitRecovery()
@@ -596,6 +612,10 @@ async def my_agent(ctx: JobContext):
     @session.on("conversation_item_added")
     def _on_transcript(ev: ConversationItemAddedEvent) -> None:
         item = ev.item
+        if getattr(item, "interrupted", False) and getattr(item, "role", None) == (
+            "assistant"
+        ):
+            call_state.mark_interrupted()
         if not isinstance(item, ChatMessage):
             return
         text = (item.text_content or "").strip()
@@ -608,6 +628,12 @@ async def my_agent(ctx: JobContext):
             rate_limit.reset()
 
     async def on_shutdown() -> None:
+        if cache_stop is not None:
+            cache_stop.set()
+        if cache_task is not None:
+            cache_task.cancel()
+        if ambient is not None:
+            await ambient.aclose()
         await asyncio.to_thread(
             _save_call_to_supabase, session, ctx, agent_name, started_at, call_log
         )
@@ -621,6 +647,11 @@ async def my_agent(ctx: JobContext):
         room=ctx.room,
         room_options=_room_options(),
     )
+    if persona_key == "ava" and ambient is not None:
+        try:
+            await ambient.start(session, ctx.room)
+        except Exception:
+            logger.exception("ambient bed failed; call continues without it")
 
     outbound = bool(phone_number) or metadata.get("direction") == "outbound"
     if persona_key == "ava" and not outbound and not kill_switch:

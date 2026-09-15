@@ -1,0 +1,148 @@
+{
+  "generated_at": "2026-09-15T03:39:37.965885+00:00",
+  "live_audio": false,
+  "target_longest_silence_ms": 800,
+  "ack_pool": [
+    "no worries",
+    "no dramas",
+    "not a problem",
+    "too easy",
+    "all good",
+    "you're right",
+    "sweet"
+  ],
+  "calls": [
+    {
+      "slug": "01-new-patient-checkup",
+      "title": "New patient check-up \u2014 cache-first availability",
+      "time_to_first_audio_ms": 0.0,
+      "longest_silence_gap_ms": 0.1,
+      "stock_phrases_used": [
+        "Good morning! You're through to Shellharbour Dentists, Ava here.",
+        "two ticks, I'll pull that up",
+        "all good"
+      ],
+      "first_audio_before_dispatch": true,
+      "stage5_fallback": false,
+      "audio_recording": null,
+      "notes": [
+        "check_availability cached=True",
+        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
+      ]
+    },
+    {
+      "slug": "02-reschedule-cancel",
+      "title": "Reschedule then cancel inside 24h",
+      "time_to_first_audio_ms": 0.0,
+      "longest_silence_gap_ms": 0.1,
+      "stock_phrases_used": [
+        "righto, let's have a look for ya",
+        "Too easy. Have a good one!"
+      ],
+      "first_audio_before_dispatch": true,
+      "stage5_fallback": false,
+      "audio_recording": null,
+      "notes": [
+        "book reverified",
+        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
+      ]
+    },
+    {
+      "slug": "03-severe-pain",
+      "title": "Severe pain Friday \u2014 same-day ladder",
+      "time_to_first_audio_ms": 0.0,
+      "longest_silence_gap_ms": 0.1,
+      "stock_phrases_used": [
+        "righto, let's have a look for ya"
+      ],
+      "first_audio_before_dispatch": true,
+      "stage5_fallback": false,
+      "audio_recording": null,
+      "notes": [
+        "urgency=same_day",
+        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
+      ]
+    },
+    {
+      "slug": "04-swollen-swallow",
+      "title": "Swollen + swallowing \u2014 no book",
+      "time_to_first_audio_ms": 0.0,
+      "longest_silence_gap_ms": 0.1,
+      "stock_phrases_used": [
+        "righto, pulling up the diary"
+      ],
+      "first_audio_before_dispatch": true,
+      "stage5_fallback": false,
+      "audio_recording": null,
+      "notes": [
+        "do_not_book after first audio",
+        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
+      ]
+    },
+    {
+      "slug": "05-bot-ask-twice",
+      "title": "Are you a real person \u2014 twice",
+      "time_to_first_audio_ms": 0.0,
+      "longest_silence_gap_ms": 0.0,
+      "stock_phrases_used": [
+        "no dramas",
+        "all good"
+      ],
+      "first_audio_before_dispatch": true,
+      "stage5_fallback": false,
+      "audio_recording": null,
+      "notes": [
+        "bot_ask_count=2",
+        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
+      ]
+    },
+    {
+      "slug": "06-figtree-dapto",
+      "title": "Figtree caller \u2014 offer Dapto",
+      "time_to_first_audio_ms": 0.0,
+      "longest_silence_gap_ms": 0.1,
+      "stock_phrases_used": [
+        "righto, pulling up the diary"
+      ],
+      "first_audio_before_dispatch": true,
+      "stage5_fallback": false,
+      "audio_recording": null,
+      "notes": [
+        "offered_branch=dapto",
+        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
+      ]
+    },
+    {
+      "slug": "07-unknown-fee",
+      "title": "Unknown fee \u2014 take_message",
+      "time_to_first_audio_ms": 0.0,
+      "longest_silence_gap_ms": 0.1,
+      "stock_phrases_used": [
+        "let me just have a look for ya"
+      ],
+      "first_audio_before_dispatch": true,
+      "stage5_fallback": false,
+      "audio_recording": null,
+      "notes": [
+        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
+      ]
+    },
+    {
+      "slug": "08-barge-in-three-times",
+      "title": "Barge-in three times \u2014 resume pool",
+      "time_to_first_audio_ms": 0.0,
+      "longest_silence_gap_ms": 0.0,
+      "stock_phrases_used": [
+        "sorry, go on",
+        "yep yep, sorry"
+      ],
+      "first_audio_before_dispatch": true,
+      "stage5_fallback": false,
+      "audio_recording": null,
+      "notes": [
+        "resume pool used, no sentence restart",
+        "audio skipped: set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, OPENAI_API_KEY to capture real recordings"
+      ]
+    }
+  ]
+}

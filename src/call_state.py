@@ -7,12 +7,14 @@ escalation live here and are injected into the session before Ava speaks.
 from __future__ import annotations
 
 import os
+import random
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from persona import DEFAULT_BRANCH_ID, get_branch
+from phrase_pools import ACKS, BARGE_IN_RESUME, CLOSINGS, OPENINGS, pick_from_pool
 
 MAX_ASKS = 3
 
@@ -134,6 +136,12 @@ class CallState:
     offered_branch: str | None = None
     bot_ask_count: int = 0
     kill_switch: bool = False
+    used_phrases: dict[str, list[str]] = field(default_factory=dict)
+    stock_phrases_used: list[str] = field(default_factory=list)
+    last_dispatch_trace: Any | None = None
+    barge_in_pending: bool = False
+    last_barge_in_resume: str | None = None
+    phrase_rng: random.Random = field(default_factory=random.Random)
 
     @property
     def branch_name(self) -> str:
@@ -188,6 +196,48 @@ class CallState:
                 else "Ask once more for the mobile, one question only."
             ),
         }
+
+    def pick_phrase(
+        self,
+        pool: str,
+        lines: Sequence[str],
+        rng: random.Random | None = None,
+    ) -> str:
+        used = self.used_phrases.setdefault(pool, [])
+        choice = pick_from_pool(used, lines, rng=rng or self.phrase_rng)
+        self.record_stock_phrase(choice)
+        return choice
+
+    def record_stock_phrase(self, phrase: str) -> None:
+        if phrase and phrase not in self.stock_phrases_used:
+            self.stock_phrases_used.append(phrase)
+
+    def pick_ack(self) -> str:
+        return self.pick_phrase("ack", ACKS)
+
+    def pick_opening(self, branch_name: str | None = None) -> str:
+        name = branch_name or self.branch_name
+        used = self.used_phrases.setdefault("opening", [])
+        template = pick_from_pool(used, OPENINGS, rng=self.phrase_rng)
+        line = template.format(branch=name)
+        self.record_stock_phrase(line)
+        return line
+
+    def pick_closing(self) -> str:
+        return self.pick_phrase("closing", CLOSINGS)
+
+    def mark_interrupted(self) -> str:
+        """Caller cut Ava off. Resume with a pool line; never restart the sentence."""
+        self.barge_in_pending = True
+        phrase = self.pick_phrase("barge_in_resume", BARGE_IN_RESUME)
+        self.last_barge_in_resume = phrase
+        return phrase
+
+    def consume_barge_in_resume(self) -> str | None:
+        if not self.barge_in_pending:
+            return None
+        self.barge_in_pending = False
+        return self.last_barge_in_resume
 
     def observe_user_text(self, text: str) -> None:
         """Code-side flow: suburb offers, urgency, bot asks. Never a branch menu."""
@@ -258,10 +308,14 @@ class CallState:
             f"- bot_ask_count: {self.bot_ask_count} "
             "(deflect once, then be honest)\n"
             f"- kill_switch: {self.kill_switch}\n"
+            f"- used_acks: {self.used_phrases.get('ack', [])}\n"
+            f"- barge_in_resume: {self.last_barge_in_resume or 'none'}\n"
             "- If urgency_level is emergency_000: do not book. Tell them triple zero "
             "or Shellharbour / Wollongong Hospital emergency.\n"
             "- If offered_branch is set: offer that clinic warmly. Never a menu.\n"
-            "- If stop_asking_mobile: do not ask for the mobile again."
+            "- If stop_asking_mobile: do not ask for the mobile again.\n"
+            "- If barge_in_resume is set: start with that phrase. Never restart the "
+            "cut-off sentence."
         )
 
     def as_dict(self) -> dict[str, Any]:

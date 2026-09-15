@@ -173,11 +173,13 @@ def test_desk_stream_requires_sign_in() -> None:
 
 
 def test_desk_stream_accepts_query_token() -> None:
+    """SSE uses the same _auth as the rest of the desk: cookie or ?token=."""
     practice = PracticeClient(mode="mock")
     app = create_app(practice=practice, require_auth=True, portal_password="secret")
     http = TestClient(app)
     digest = _cookie_digest("secret")
-    with http.stream("GET", f"/api/desk/stream?token={digest}") as response:
-        assert response.status_code == 200
-    with http.stream("GET", "/api/desk/stream?token=secret") as response:
-        assert response.status_code == 200
+    assert http.get("/api/desk/stream").status_code == 401
+    assert http.get("/api/branches").status_code == 401
+    assert http.get(f"/api/branches?token={digest}").status_code == 200
+    assert http.get("/api/branches?token=secret").status_code == 200
+    assert http.get("/api/desk/stream?token=wrong").status_code == 401

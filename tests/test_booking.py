@@ -13,6 +13,8 @@ from booking import (
     apply_job_booking_overrides,
     cancellation_fee_applies,
     filter_slots_by_clinician,
+    invalid_slot_id_result,
+    is_canonical_slot_id,
     parse_date_range,
     seed_inside_24h_booking,
     spoken_two_slot_offer,
@@ -285,3 +287,29 @@ async def test_memory_provider_filters_clinician() -> None:
     assert missing["ok"] is True
     assert missing["slots"] == []
     assert "invent" in (missing.get("note") or "").lower()
+
+
+def test_canonical_slot_id_rejects_invented_ids() -> None:
+    assert is_canonical_slot_id("slot_shellharbour_2026-09-22_0830_dr-mohit-tolani")
+    assert not is_canonical_slot_id("slot-8-30-tuesday-dr-mohit-tolani-follow-up")
+    assert not is_canonical_slot_id("slot_priya_tomorrow")
+    rejected = invalid_slot_id_result("slot-8-30-tuesday-dr-mohit-tolani-follow-up")
+    assert rejected["reason"] == "invalid_slot_id"
+    assert rejected["ok"] is False
+    assert rejected["confirmed"] is False
+    assert "check_availability" in rejected["note"]
+
+
+@pytest.mark.asyncio
+async def test_memory_provider_keeps_full_open_slot_list() -> None:
+    client = PracticeClient(mode="mock")
+    seed_mock_diary(client, today=date(2026, 9, 15), days=14)
+    provider = MemoryBookingProvider(client)
+    result = await provider.check_availability(
+        branch="shellharbour",
+        appointment_type="check-up",
+        date_range="2026-09-15/2026-09-28",
+        limit=None,
+    )
+    assert result["ok"] is True
+    assert len(result["slots"]) > 12

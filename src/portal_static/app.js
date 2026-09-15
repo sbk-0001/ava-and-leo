@@ -3,6 +3,23 @@ const state = {
   branches: [],
   diary: { slots: [], bookings: [] },
   room: null,
+  deskSource: null,
+  seenDeskIds: new Set(),
+};
+
+const DESK_TOPIC = "ava.desk";
+
+const FIELD_LABELS = {
+  name: "Name",
+  time: "Time",
+  date: "Date",
+  doctor: "Doctor",
+  branch: "Branch",
+  reason: "Reason",
+  booking_id: "Booking",
+  phone: "Phone",
+  open_slots: "Open slots",
+  matches: "Matches",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -208,6 +225,126 @@ $("book-form").addEventListener("submit", async (event) => {
   }
 });
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function appendLiveLine(containerId, className, html) {
+  const list = $(containerId);
+  const line = document.createElement("article");
+  line.className = className;
+  line.innerHTML = html;
+  list.appendChild(line);
+  list.scrollTop = list.scrollHeight;
+}
+
+function renderTranscript(packet) {
+  const role = packet.role === "assistant" ? "assistant" : "user";
+  const who = role === "assistant" ? "Ava" : "Caller";
+  const room = packet.room ? ` · ${packet.room}` : "";
+  appendLiveLine(
+    "live-transcript",
+    `live-line ${role}`,
+    `<div class="who">${who}${escapeHtml(room)}</div><div>${escapeHtml(packet.text || "")}</div>`
+  );
+}
+
+function renderActivity(packet) {
+  const payload = packet.payload || {};
+  const fields = Object.entries(FIELD_LABELS)
+    .filter(([key]) => payload[key] !== undefined && payload[key] !== "")
+    .map(
+      ([key, label]) =>
+        `<span><strong>${escapeHtml(label)}:</strong> ${escapeHtml(payload[key])}</span>`
+    )
+    .join("");
+  const room = packet.room ? ` · ${packet.room}` : "";
+  appendLiveLine(
+    "live-activity",
+    "live-line activity",
+    `<div class="who">${escapeHtml(
+      packet.label || packet.action || "Activity"
+    )}${escapeHtml(room)}</div>${fields ? `<div class="fields">${fields}</div>` : ""}`
+  );
+}
+
+async function maybeRefreshDiary(packet) {
+  if (!packet.refresh_diary) return;
+  const payload = packet.payload || {};
+  if (payload.date && $("diary-date").value !== payload.date) {
+    $("diary-date").value = payload.date;
+  }
+  if (payload.branch && payload.branch !== state.branchId) {
+    state.branchId = payload.branch;
+    renderTabs();
+    renderFacts();
+  }
+  await loadDiary();
+}
+
+function handleDeskPacket(packet) {
+  if (!packet || typeof packet !== "object") return;
+  if (packet.id) {
+    if (state.seenDeskIds.has(packet.id)) return;
+    state.seenDeskIds.add(packet.id);
+  }
+  if (packet.room) {
+    const hint = $("live-call-hint");
+    const channel = packet.channel === "sip" ? "Inbound phone" : "Live call";
+    hint.textContent = `${channel} · ${packet.room}`;
+  }
+  if (packet.type === "transcript" && packet.text) {
+    renderTranscript(packet);
+    return;
+  }
+  if (packet.type === "activity") {
+    renderActivity(packet);
+    maybeRefreshDiary(packet).catch(() => {});
+  }
+}
+
+function deskStreamUrl() {
+  const token = new URLSearchParams(window.location.search).get("token");
+  return token
+    ? `/api/desk/stream?token=${encodeURIComponent(token)}`
+    : "/api/desk/stream";
+}
+
+function subscribeDeskStream() {
+  if (state.deskSource) {
+    state.deskSource.close();
+  }
+  const source = new EventSource(deskStreamUrl(), { withCredentials: true });
+  source.onmessage = (event) => {
+    try {
+      handleDeskPacket(JSON.parse(event.data));
+    } catch {
+      /* ignore keepalives / malformed */
+    }
+  };
+  state.deskSource = source;
+}
+
+function subscribeDeskFeed(room) {
+  const RoomEvent = window.LivekitClient.RoomEvent;
+  const decoder = new TextDecoder();
+  room.on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => {
+    if (topic && topic !== DESK_TOPIC) return;
+    let packet;
+    try {
+      packet = JSON.parse(decoder.decode(payload));
+    } catch {
+      return;
+    }
+    if (packet.type !== "transcript" && packet.type !== "activity") return;
+    handleDeskPacket(packet);
+  });
+}
+
 function setCallStatus(message, visible = true) {
   const el = $("call-status");
   el.textContent = message;
@@ -231,6 +368,7 @@ async function callAva() {
       }
     });
     room.on(RoomEvent.Disconnected, () => hangUp(false));
+    subscribeDeskFeed(room);
     await room.connect(token.url, token.token);
     await room.startAudio();
     await room.localParticipant.setMicrophoneEnabled(true);
@@ -289,6 +427,7 @@ async function boot() {
   renderTabs();
   renderFacts();
   await loadDiary();
+  subscribeDeskStream();
 }
 
 boot().catch((error) => {

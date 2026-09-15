@@ -82,6 +82,68 @@ h3 { font-size: 1.05rem; margin: 1.2rem 0 0.4rem; }
   border-color: var(--teal);
 }
 
+.live-call {
+  margin: 0 1.25rem 0.75rem;
+}
+
+.live-call-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-end;
+  margin-bottom: 0.8rem;
+}
+
+.live-call-hint { font-size: 0.85rem; max-width: 18rem; text-align: right; }
+
+.live-call-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.live-call-grid h3 { margin-top: 0; }
+
+.live-scroll {
+  min-height: 11rem;
+  max-height: 18rem;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: 0.45rem;
+  padding: 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.live-line {
+  padding: 0.5rem 0.65rem;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+}
+
+.live-line .who {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 0.15rem;
+}
+
+.live-line.user { background: var(--open); }
+.live-line.assistant { background: #eef6f3; }
+.live-line.activity { background: var(--booked); }
+
+.live-line .fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.7rem;
+  margin-top: 0.3rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
 .layout {
   display: grid;
   grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.3fr);
@@ -217,6 +279,9 @@ button.ghost {
 
 @media (max-width: 860px) {
   .layout { grid-template-columns: 1fr; }
+  .live-call-grid { grid-template-columns: 1fr; }
+  .live-call-head { flex-direction: column; align-items: flex-start; }
+  .live-call-hint { text-align: left; max-width: none; }
   .topbar { flex-direction: column; }
   .auth-note { text-align: left; max-width: none; }
   .slot { grid-template-columns: 1fr; }

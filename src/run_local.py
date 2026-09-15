@@ -50,12 +50,18 @@ def _start_portal() -> str:
 
 def main() -> None:
     url = _start_portal()
+    os.environ.setdefault("PORTAL_URL", url)
+    os.environ.setdefault("DESK_EVENTS_URL", url)
     password = os.getenv("PORTAL_PASSWORD", "").strip()
     print()
     print(f"Ava clinic portal: {url}")
     print("  Pick a branch, book in the mock diary, then Call Ava.")
+    print("  Live call panel shows web + inbound phone transcript and bookings.")
+    print("  Desk bus: DESK_EVENTS_URL / PORTAL_URL → POST /api/desk/events")
     if password:
-        print("  Auth: PORTAL_PASSWORD is set (shared gate).")
+        print(
+            "  Auth: PORTAL_PASSWORD is set (shared gate). SSE accepts cookie or ?token=."
+        )
     else:
         print("  Auth: open on localhost. Set PORTAL_PASSWORD before exposing it.")
     print("  Agent worker starting in this process (AGENT_PERSONA=ava, mock diary).")

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from livekit import api
@@ -13,9 +14,10 @@ from livekit.agents import Agent, RunContext, function_tool, get_job_context
 from livekit.plugins import openai
 from openai.types.beta.realtime.session import TurnDetection
 
-from booking import BookingProvider
+from booking import BookingProvider, invalid_slot_id_result, is_canonical_slot_id
 from call_log import CallLog
 from call_state import CallState
+from desk_events import activity_packet_from_result, schedule_desk_publish
 from filler_ladder import FillerLadder, SessionSpeaker
 from persona import ava_instructions, get_branch, quote_fee, resolve_tool_branch
 from phrase_pools import STAGE_1
@@ -31,6 +33,8 @@ AVA_DEFAULT_VOICE = "marin"
 AVA_VAD_SILENCE_MS = 500
 AVA_SPEECH_SPEED = 0.9
 AVA_TEMPERATURE = 0.95
+
+DeskNotify = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 
 def resolve_ava_voice(env: Mapping[str, str] | None = None) -> str:
@@ -104,12 +108,15 @@ class AvaReceptionist(Agent):
         transfer_to: str | None = None,
         call_log: CallLog | None = None,
         ambient: Any | None = None,
+        on_desk_event: DeskNotify | None = None,
     ) -> None:
         self.state = state
         self.booking = booking
         self.transfer_to = transfer_to
         self.call_log = call_log
         self.ambient = ambient
+        self.on_desk_event = on_desk_event
+        self._desk_tasks: set[asyncio.Task[Any]] = set()
         self._active_ladder: FillerLadder | None = None
         self.branch = get_branch(state.branch)
         super().__init__(
@@ -123,7 +130,42 @@ class AvaReceptionist(Agent):
             self.branch = get_branch(selected)
         return selected
 
-    def _log_tool(self, name: str, payload: dict[str, Any]) -> None:
+    def _job_room(self) -> Any:
+        try:
+            return get_job_context().room
+        except Exception:
+            return None
+
+    def _notify_desk(
+        self, action: str, arguments: dict[str, Any], result: dict[str, Any]
+    ) -> None:
+        """Push booking activity as soon as the practice tool returns.
+
+        Works for web Call Ava and inbound SIP. HTTP bus reaches the desk
+        when the browser is not in the LiveKit room.
+        """
+        packet = activity_packet_from_result(action, arguments, result)
+        if packet is None:
+            return
+        if self.on_desk_event is not None:
+            maybe = self.on_desk_event(packet)
+            if inspect.isawaitable(maybe):
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    return
+                task = loop.create_task(maybe)
+                self._desk_tasks.add(task)
+                task.add_done_callback(self._desk_tasks.discard)
+            return
+        schedule_desk_publish(self._job_room(), packet)
+
+    def _log_tool(
+        self,
+        name: str,
+        payload: dict[str, Any],
+        arguments: dict[str, Any] | None = None,
+    ) -> None:
         logger.info("tool %s %s", name, {k: payload.get(k) for k in list(payload)[:8]})
         if self.call_log is not None:
             self.call_log.add_turn(
@@ -132,6 +174,7 @@ class AvaReceptionist(Agent):
                 tool_name=name,
                 tool_payload=payload,
             )
+        self._notify_desk(name, arguments or {}, payload)
 
     async def _cover(self, context: RunContext) -> None:
         """Stage-1 filler only. Prefer _dispatch_with_ladder so audio precedes the network."""
@@ -274,7 +317,9 @@ class AvaReceptionist(Agent):
         branch: str | None = None,
         clinician: str | None = None,
     ) -> dict[str, Any]:
-        """Check real diary availability. Never invent times.
+        """Check real diary availability before offering times. Never invent times.
+
+        Must check before offering any time. Book only an exact slot_id from slots.
 
         Args:
             branch: shellharbour, dapto, or woonona. Default is the caller's branch.
@@ -310,7 +355,16 @@ class AvaReceptionist(Agent):
             return result
 
         result = await self._dispatch_with_ladder(context, _run)
-        self._log_tool("check_availability", result)
+        self._log_tool(
+            "check_availability",
+            result,
+            {
+                "appointment_type": appointment_type,
+                "date_range": date_range,
+                "branch": branch,
+                "clinician": clinician,
+            },
+        )
         return result
 
     @function_tool()
@@ -325,11 +379,13 @@ class AvaReceptionist(Agent):
         patient_id: str | None = None,
         date_of_birth: str | None = None,
     ) -> dict[str, Any]:
-        """Book a slot returned by check_availability. Say confirmed only if confirmed is true.
+        """Book only an exact slot_id from check_availability. Never invent ids.
+
+        Call check_availability first. Say confirmed only if confirmed is true.
 
         Args:
             branch: Clinic id: shellharbour, dapto, or woonona.
-            slot_id: Slot id from check_availability.
+            slot_id: Exact slot_id from the slots list. Never reconstruct one.
             reason: Short reason for the visit.
             name: Caller's name for a new patient.
             mobile: Australian mobile.
@@ -345,6 +401,8 @@ class AvaReceptionist(Agent):
                     "action": "call_000",
                     "note": "Do not book this caller. Escalate. Triple zero if needed.",
                 }
+            if not is_canonical_slot_id(slot_id):
+                return invalid_slot_id_result(slot_id)
             if name:
                 self.state.caller_name = name
             mobile_result = self.state.register_mobile(
@@ -368,7 +426,18 @@ class AvaReceptionist(Agent):
             return booked
 
         result = await self._dispatch_with_ladder(context, _run)
-        self._log_tool("book_appointment", result)
+        self._log_tool(
+            "book_appointment",
+            result,
+            {
+                "slot_id": slot_id,
+                "reason": reason,
+                "branch": branch,
+                "name": name,
+                "mobile": mobile,
+                "patient_id": patient_id,
+            },
+        )
         return result
 
     @function_tool()
@@ -395,7 +464,11 @@ class AvaReceptionist(Agent):
             return moved
 
         result = await self._dispatch_with_ladder(context, _run)
-        self._log_tool("reschedule_appointment", result)
+        self._log_tool(
+            "reschedule_appointment",
+            result,
+            {"booking_id": booking_id, "new_slot_id": new_slot_id},
+        )
         return result
 
     @function_tool()
@@ -421,7 +494,7 @@ class AvaReceptionist(Agent):
             return cancelled
 
         result = await self._dispatch_with_ladder(context, _run)
-        self._log_tool("cancel_appointment", result)
+        self._log_tool("cancel_appointment", result, {"booking_id": booking_id})
         return result
 
     @function_tool()
@@ -449,7 +522,7 @@ class AvaReceptionist(Agent):
             return looked
 
         result = await self._dispatch_with_ladder(context, _run)
-        self._log_tool("lookup_patient", result)
+        self._log_tool("lookup_patient", result, {"mobile": mobile})
         return result
 
     @function_tool()
@@ -508,7 +581,11 @@ class AvaReceptionist(Agent):
             return left
 
         result = await self._dispatch_with_ladder(context, _run)
-        self._log_tool("take_message", result)
+        self._log_tool(
+            "take_message",
+            result,
+            {"name": name, "mobile": mobile, "reason": reason, "branch": branch},
+        )
         return result
 
     @function_tool()

@@ -33,6 +33,7 @@ from backchannel import attach_backchannels
 from booking import apply_job_booking_overrides, get_shared_booking_provider
 from call_log import CallLog, iso, log_dir_from_env, supabase_turn_row
 from call_state import CallState, kill_switch_enabled
+from desk_events import schedule_desk_publish, transcript_packet
 from persona import CANONICAL_PERSONAS, canonical_persona, get_branch, resolve_persona
 from realtime_hygiene import (
     RateLimitRecovery,
@@ -130,6 +131,20 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes"}
+
+
+def _register_desk_feed(session: AgentSession, room: Any) -> None:
+    """Forward committed turns to the staff desk for web *and* SIP rooms.
+
+    Booking activity is emitted from AvaReceptionist tools themselves.
+    conversation_item_added covers user and Ava ChatMessages on every Ava
+    session, including inbound telephony rooms such as ``call-+61…``.
+    Docs: https://docs.livekit.io/reference/agents/events/#conversation_item_added
+    """
+
+    @session.on("conversation_item_added")
+    def _on_desk_item(ev: ConversationItemAddedEvent) -> None:
+        schedule_desk_publish(room, transcript_packet(ev.item))
 
 
 def _register_latency_logging(session: AgentSession) -> None:
@@ -584,6 +599,7 @@ async def my_agent(ctx: JobContext):
         # Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/
         session = _build_ava_session()
         attach_backchannels(session, call_state)
+        _register_desk_feed(session, ctx.room)
     else:
         _require_env(GENERIC_ENV_VARS)
         agent = Assistant()

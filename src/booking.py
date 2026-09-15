@@ -146,6 +146,28 @@ def parse_date_range(
     return now.isoformat(), (now + timedelta(days=6)).isoformat()
 
 
+CANONICAL_SLOT_ID_RE = re.compile(r"^slot_[a-z0-9]+_\d{4}-\d{2}-\d{2}_")
+
+
+def is_canonical_slot_id(slot_id: str) -> bool:
+    """Diary ids look like slot_<branch>_<YYYY-MM-DD>_<time>_dr-..."""
+    return bool(CANONICAL_SLOT_ID_RE.match((slot_id or "").strip()))
+
+
+def invalid_slot_id_result(slot_id: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "confirmed": False,
+        "reason": "invalid_slot_id",
+        "slot_id": slot_id,
+        "note": (
+            "That slot_id is not a diary id. Call check_availability again "
+            "and book only an exact slot_id from the slots list. "
+            "Never invent or reconstruct times or ids."
+        ),
+    }
+
+
 def _norm_clinician(value: str) -> str:
     text = re.sub(r"\s+", " ", value).strip().lower()
     return re.sub(r"^dr\.?\s+", "", text)

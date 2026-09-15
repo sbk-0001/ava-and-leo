@@ -9,6 +9,7 @@ Docs: https://docs.livekit.io/agents/server/agent-dispatch/
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -20,10 +21,11 @@ from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from desk_events import DeskBus
 from persona import BRANCHES, branch_as_dict, get_branch
 from practice import PracticeClient, get_shared_practice
 
@@ -67,6 +69,12 @@ def _cookie_digest(password: str) -> str:
     return hashlib.sha256(f"ava-portal:{password}".encode()).hexdigest()
 
 
+def _secrets_match(provided: str, expected: str) -> bool:
+    if not provided or not expected or len(provided) != len(expected):
+        return False
+    return hmac.compare_digest(provided, expected)
+
+
 def _is_loopback(request: Request) -> bool:
     host = (request.client.host if request.client else "") or ""
     if request.headers.get("x-forwarded-for"):
@@ -83,6 +91,7 @@ def create_app(
     """Build the portal app. Tests pass an in-memory PracticeClient."""
     app = FastAPI(title="Ava desk — Shellharbour · Dapto · Woonona", docs_url=None)
     app.state.practice = practice
+    app.state.desk_bus = DeskBus()
     app.state.portal_password = (
         portal_password
         if portal_password is not None
@@ -109,12 +118,30 @@ def create_app(
                 ),
             )
         cookie = request.cookies.get(COOKIE_NAME, "")
+        token = request.query_params.get("token", "")
         expected = _cookie_digest(password)
-        if cookie and hmac.compare_digest(cookie, expected):
+        if _secrets_match(cookie, expected):
+            return
+        if _secrets_match(token, expected) or _secrets_match(token, password):
             return
         raise HTTPException(
             status_code=401,
             detail="Sign in with PORTAL_PASSWORD.",
+        )
+
+    def _worker_auth(request: Request) -> None:
+        """Accept desk events from the local Ava worker, not the public internet."""
+        token = os.getenv("DESK_EVENTS_TOKEN", "").strip()
+        header = request.headers.get("x-desk-token", "")
+        if token and _secrets_match(header, token):
+            return
+        if app.state.require_auth is False:
+            return
+        if _is_loopback(request):
+            return
+        raise HTTPException(
+            status_code=403,
+            detail="Desk events are only accepted from the local worker.",
         )
 
     @app.get("/api/health")
@@ -312,6 +339,56 @@ def create_app(
             .to_jwt()
         )
         return {"token": jwt, "url": url, "room": room, "branch_id": branch.id}
+
+    @app.post("/api/desk/events")
+    async def desk_events(request: Request) -> dict[str, bool]:
+        """Local worker publishes live transcript/activity for the desk SSE bus."""
+        _worker_auth(request)
+        try:
+            packet = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Invalid JSON.") from exc
+        if not isinstance(packet, dict) or packet.get("type") not in {
+            "transcript",
+            "activity",
+        }:
+            raise HTTPException(
+                status_code=400,
+                detail="Expected a desk transcript or activity packet.",
+            )
+        app.state.desk_bus.publish(packet)
+        return {"ok": True}
+
+    @app.get("/api/desk/stream")
+    async def desk_stream(request: Request) -> StreamingResponse:
+        """Signed-in staff subscribe to live desk events (SSE). Cookie or ?token=."""
+        _auth(request)
+        queue = app.state.desk_bus.subscribe()
+
+        async def generate():
+            try:
+                yield "event: ready\ndata: {}\n\n"
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        packet = await asyncio.wait_for(queue.get(), timeout=20)
+                    except TimeoutError:
+                        yield ": keepalive\n\n"
+                        continue
+                    yield f"data: {json.dumps(packet, default=str)}\n\n"
+            finally:
+                app.state.desk_bus.unsubscribe(queue)
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

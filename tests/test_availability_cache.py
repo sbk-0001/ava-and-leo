@@ -7,6 +7,7 @@ from datetime import date, timedelta
 import pytest
 
 from availability_cache import (
+    AGENT_SLOT_LIMIT,
     CACHE_WINDOW_DAYS,
     REFRESH_MAX_S,
     REFRESH_MIN_S,
@@ -191,3 +192,89 @@ async def test_book_slot_gone_does_not_confirm() -> None:
     assert booked["reason"] == "slot_gone"
     assert booked["reverified"] is True
     assert inner.books == 0
+
+
+@pytest.mark.asyncio
+async def test_prewarm_then_next_week_returns_slots() -> None:
+    cache, inner = _cache()
+    await cache.prewarm(("shellharbour",))
+    window = cache.window_for("shellharbour")
+    assert window is not None
+    assert len(window.slots) > AGENT_SLOT_LIMIT
+    result = await cache.check_availability(
+        branch="shellharbour",
+        appointment_type="existing",
+        date_range="next week",
+    )
+    assert inner.checks == 1
+    assert result["ok"] is True
+    assert result["cached"] is True
+    assert result["date_from"] == "2026-09-21"
+    assert result["date_to"] == "2026-09-27"
+    assert result["slots"]
+    assert len(result["slots"]) <= AGENT_SLOT_LIMIT
+    assert all("2026-09-21" <= slot["date"] <= "2026-09-27" for slot in result["slots"])
+
+
+@pytest.mark.asyncio
+async def test_covers_but_empty_range_falls_through_to_live() -> None:
+    cache, inner = _cache()
+    await cache.prewarm(("shellharbour",))
+    window = cache.window_for("shellharbour")
+    assert window is not None
+    window.slots = [slot for slot in window.slots if slot["date"] == "2026-09-15"]
+    result = await cache.check_availability(
+        branch="shellharbour",
+        appointment_type="existing",
+        date_range="next week",
+    )
+    assert result["ok"] is True
+    assert result["cached"] is False
+    assert result["slots"]
+    assert all("2026-09-21" <= slot["date"] <= "2026-09-27" for slot in result["slots"])
+    assert inner.checks == 2
+
+
+@pytest.mark.asyncio
+async def test_invented_slot_id_rejected() -> None:
+    cache, inner = _cache()
+    await cache.prewarm(("shellharbour",))
+    booked = await cache.book_appointment(
+        branch="shellharbour",
+        slot_id="slot-8-30-tuesday-dr-mohit-tolani-follow-up",
+        reason="follow-up",
+        name="Bill Gates",
+        mobile="0412000111",
+    )
+    assert booked["ok"] is False
+    assert booked["confirmed"] is False
+    assert booked["reason"] == "invalid_slot_id"
+    assert "check_availability" in booked["note"]
+    assert inner.books == 0
+    assert cache.reverifies == 0
+
+
+@pytest.mark.asyncio
+async def test_real_slot_id_from_next_week_books() -> None:
+    cache, inner = _cache()
+    await cache.prewarm(("shellharbour",))
+    slots = await cache.check_availability(
+        branch="shellharbour",
+        appointment_type="existing",
+        date_range="next week",
+    )
+    slot = next(
+        (item for item in slots["slots"] if "mohit" in item["slot_id"]),
+        slots["slots"][0],
+    )
+    booked = await cache.book_appointment(
+        branch="shellharbour",
+        slot_id=slot["slot_id"],
+        reason="follow-up",
+        name="Bill Gates",
+        mobile="0412000111",
+    )
+    assert booked["ok"] is True
+    assert booked["confirmed"] is True
+    assert booked["reverified"] is True
+    assert inner.books == 1

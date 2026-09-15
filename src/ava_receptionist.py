@@ -272,13 +272,19 @@ class AvaReceptionist(Agent):
         appointment_type: str,
         date_range: str,
         branch: str | None = None,
+        clinician: str | None = None,
     ) -> dict[str, Any]:
         """Check real diary availability. Never invent times.
 
         Args:
             branch: shellharbour, dapto, or woonona. Default is the caller's branch.
             appointment_type: check-up, emergency, existing, whitening, etc.
-            date_range: YYYY-MM-DD, YYYY-MM-DD/YYYY-MM-DD, today, tomorrow, or this week.
+            date_range: Prefer phrases the diary understands — next week, next tuesday
+                / next <weekday>, this week, today, tomorrow — or an explicit ISO
+                range YYYY-MM-DD or YYYY-MM-DD/YYYY-MM-DD. Unknown strings fall
+                back to this week, so pass the caller's phrase or ISO dates.
+            clinician: Optional preferred dentist (e.g. Dr Mohit). Filters slots
+                that name a clinician. Empty if none match — do not invent a time.
         """
 
         async def _run() -> dict[str, Any]:
@@ -298,10 +304,9 @@ class AvaReceptionist(Agent):
                 branch=clinic_id,
                 appointment_type=appointment_type,
                 date_range=date_range,
+                clinician=clinician,
             )
-            if result.get("ok") and result.get("slots"):
-                first = result["slots"][0]
-                self.state.proposed_slot = first.get("slot_id")
+            self.state.remember_availability(result)
             return result
 
         result = await self._dispatch_with_ladder(context, _run)

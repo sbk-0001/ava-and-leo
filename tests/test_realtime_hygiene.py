@@ -11,9 +11,11 @@ import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
 from livekit.agents.llm import ChatContext
 
 from call_state import CallState
+from phrase_pools import STAGE_2, STAGE_3
 from realtime_hygiene import (
     CONTEXT_MAX_ITEMS,
     RATE_LIMIT_COVER_INSTRUCTIONS,
@@ -22,6 +24,7 @@ from realtime_hygiene import (
     call_state_anchor_text,
     is_rate_limit_error,
     maybe_trim_realtime_context,
+    parse_retry_after_s,
     rate_limit_backoff_s,
     should_trim_context,
     trimmed_chat_context,
@@ -120,9 +123,28 @@ def test_rate_limit_backoff_grows_and_caps() -> None:
     assert rate_limit_backoff_s(8) == 8.0
 
 
+def test_parse_retry_after_from_openai_tpm_error() -> None:
+    err = SimpleNamespace(
+        message=(
+            "Rate limit reached for gpt-4o-realtime on tokens per min (TPM): "
+            "Limit 40000, Used 40000, Requested 812. Please try again in 6.42s."
+        ),
+        code="rate_limit_exceeded",
+    )
+    assert parse_retry_after_s(err) == pytest.approx(6.42)
+    assert parse_retry_after_s("please try again in 2s") == 2.0
+    assert parse_retry_after_s(SimpleNamespace(message="no hint")) is None
+    assert rate_limit_backoff_s(1, retry_after_s=6.42) >= 6.42
+
+
 async def test_rate_limit_recovery_covers_trims_and_retries() -> None:
     sleeps: list[float] = []
-    session = SimpleNamespace(generate_reply=AsyncMock())
+    said: list[str] = []
+
+    def say(text: str, **_kwargs: object) -> None:
+        said.append(text)
+
+    session = SimpleNamespace(generate_reply=AsyncMock(), say=say)
     agent = SimpleNamespace(trim_calls=0)
 
     async def trim() -> None:
@@ -133,13 +155,54 @@ async def test_rate_limit_recovery_covers_trims_and_retries() -> None:
 
     assert sleeps == [1.0]
     assert agent.trim_calls == 1
+    assert said
+    assert said[0] in STAGE_2 or said[0] in STAGE_3
     spoken = [
         call.kwargs.get("instructions")
         for call in session.generate_reply.await_args_list
     ]
-    assert RATE_LIMIT_COVER_INSTRUCTIONS in spoken
     assert RATE_LIMIT_RETRY_INSTRUCTIONS in spoken
     assert "just a sec" in RATE_LIMIT_COVER_INSTRUCTIONS.lower()
+
+
+async def test_rate_limit_recovery_uses_retry_after_and_speaks_slots() -> None:
+    sleeps: list[float] = []
+    said: list[str] = []
+
+    def say(text: str, **_kwargs: object) -> None:
+        said.append(text)
+
+    session = SimpleNamespace(generate_reply=AsyncMock(), say=say)
+    state = CallState(branch="shellharbour")
+    state.remember_availability(
+        {
+            "ok": True,
+            "slots": [
+                {
+                    "date": "2026-09-22",
+                    "time": "10:00",
+                    "clinician": "Dr Mohit Tolani",
+                },
+                {
+                    "date": "2026-09-23",
+                    "time": "14:30",
+                    "clinician": "Dr Mohit Tolani",
+                },
+            ],
+        }
+    )
+    err = SimpleNamespace(
+        message="rate_limit_exceeded. Please try again in 4.5s.",
+        code="rate_limit_exceeded",
+    )
+    recovery = RateLimitRecovery(sleep=lambda s: sleeps.append(s) or None)
+    await recovery.recover(session, error=err, state=state)
+
+    assert sleeps
+    assert sleeps[0] >= 4.5
+    assert any("Tuesday" in line or "10:00" in line for line in said)
+    assert any("Mohit" in line for line in said)
+    session.generate_reply.assert_not_called()
 
 
 async def test_maybe_trim_calls_update_when_over_budget() -> None:

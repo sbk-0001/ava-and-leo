@@ -36,6 +36,7 @@ STAGE_OFFSETS_MS: dict[int, int] = {
     5: 12000,
 }
 JITTER_MS = 300
+FAST_PATH_S = 0.3
 WORD_DURATION_S = 0.45  # ~0.9 speech rate, one word then the result
 
 
@@ -57,6 +58,7 @@ class DispatchTrace:
     stage5_fallback: bool = False
     caller_interrupted: bool = False
     finished_word_before_result: bool = False
+    fast_path: bool = False
 
     @property
     def audio_before_dispatch(self) -> bool:
@@ -330,10 +332,16 @@ class FillerLadder:
 
             while True:
                 if tool_task.done():
+                    result = tool_task.result()
+                    elapsed = 0.0
+                    if self.trace.tool_dispatch_ts is not None:
+                        elapsed = self.clock() - self.trace.tool_dispatch_ts
+                    cached = bool(isinstance(result, Mapping) and result.get("cached"))
+                    self.trace.fast_path = cached or elapsed < FAST_PATH_S
                     await self.speaker.finish_current_word()
                     self.trace.finished_word_before_result = True
                     self._pending.clear()
-                    return tool_task.result(), self.trace
+                    return result, self.trace
 
                 if not self._pending:
                     await self._sleep(0.01)
@@ -342,10 +350,16 @@ class FillerLadder:
                 due, stage = self._pending[0]
                 now = self.clock()
                 if now < due:
-                    await asyncio.sleep(0)
-                    if tool_task.done():
-                        continue
-                    await self._sleep(due - now)
+                    remaining = due - now
+                    sleep_task = asyncio.create_task(self._sleep(remaining))
+                    await asyncio.wait(
+                        {tool_task, sleep_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if not sleep_task.done():
+                        sleep_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError, Exception):
+                            await sleep_task
                     continue
 
                 self._pending.pop(0)

@@ -49,10 +49,12 @@ def test_require_real_rejects_synthetic_placeholder(tmp_path: Path) -> None:
 
 
 def test_committed_filler_bank_is_not_synthetic_placeholder() -> None:
-    from filler_bank import SYNTHETIC_SOURCE, load_manifest
+    from filler_bank import REAL_TTS_SOURCE, SYNTHETIC_SOURCE, VOICE, load_manifest
 
     manifest = load_manifest()
     assert manifest["source"] != SYNTHETIC_SOURCE
+    assert manifest["source"] == REAL_TTS_SOURCE
+    assert manifest["voice"] == VOICE
     assert_filler_bank(require_real=True)
 
 

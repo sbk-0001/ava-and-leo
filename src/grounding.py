@@ -1,19 +1,21 @@
 """Pre-TTS grounding gate. SpeakableFacts come from successful tools only.
 
 Realtime S2S has no TTS node — intercept lives on:
-  * session.say / SessionSpeaker (fillers, scripts) — true pre-speech
+  * session.say / SessionSpeaker when TTS or Realtime say() exists
+  * generate_reply on OpenAI Realtime (session.say raises without TTS)
   * Agent.tts_node — STT-LLM-TTS pipeline
-  * Agent.transcription_node — Realtime transcript rewrite + interrupt/say
+  * Agent.transcription_node — rewrite captions, interrupt, generate_reply
 
 Docs: https://docs.livekit.io/agents/logic/nodes/
       https://docs.livekit.io/agents/multimodality/audio/#session-say
+      https://docs.livekit.io/agents/models/realtime/#scripted-speech-output
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import AsyncIterable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
@@ -383,35 +385,41 @@ def _pin_dentist(text: str, facts: SpeakableFacts) -> tuple[str, bool]:
     return rewritten, swapped
 
 
-def gate_utterance(text: str, facts: SpeakableFacts) -> GateResult:
+def gate_utterance(text: str, facts: SpeakableFacts, *, log: bool = True) -> GateResult:
     """Strip ungrounded date/time/dentist/confirm language before TTS."""
     original = text
     spoken = text
     violations: list[str] = []
+
+    def _finish(result: GateResult) -> GateResult:
+        if log and result.suppressed:
+            logger.warning("%s", result.log_line)
+        return result
+
     if not original.strip():
         return GateResult(original=original, spoken=spoken, suppressed=False)
 
     if _CONFIRM_RE.search(spoken) and not facts.confirm_allowed:
         violations.append("confirm")
-        result = GateResult(
-            original=original,
-            spoken=CONFIRM_SUBSTITUTE,
-            suppressed=True,
-            violations=violations,
+        return _finish(
+            GateResult(
+                original=original,
+                spoken=CONFIRM_SUBSTITUTE,
+                suppressed=True,
+                violations=violations,
+            )
         )
-        logger.warning("%s", result.log_line)
-        return result
 
     if _CHOCKERS_RE.search(spoken) and not facts.may_say_chockers:
         violations.append("chockers")
-        result = GateResult(
-            original=original,
-            spoken=CHOCKERS_SUBSTITUTE,
-            suppressed=True,
-            violations=violations,
+        return _finish(
+            GateResult(
+                original=original,
+                spoken=CHOCKERS_SUBSTITUTE,
+                suppressed=True,
+                violations=violations,
+            )
         )
-        logger.warning("%s", result.log_line)
-        return result
 
     spoken, dentist_swapped = _pin_dentist(spoken, facts)
     if dentist_swapped:
@@ -424,52 +432,84 @@ def gate_utterance(text: str, facts: SpeakableFacts) -> GateResult:
         extra = [hit for hit in date_hits if not _known(hit, facts.dates)]
         if extra or not facts.dates:
             violations.append("date")
-            result = GateResult(
-                original=original,
-                spoken=DATE_SUBSTITUTE
-                if "next " in original.lower()
-                else SAFE_SUBSTITUTE,
-                suppressed=True,
-                violations=violations,
+            return _finish(
+                GateResult(
+                    original=original,
+                    spoken=DATE_SUBSTITUTE
+                    if "next " in original.lower()
+                    else SAFE_SUBSTITUTE,
+                    suppressed=True,
+                    violations=violations,
+                )
             )
-            logger.warning("%s", result.log_line)
-            return result
     ungrounded_dates = [hit for hit in date_hits if not _known(hit, facts.dates)]
     if ungrounded_dates:
         violations.append("date")
-        result = GateResult(
-            original=original,
-            spoken=SAFE_SUBSTITUTE,
-            suppressed=True,
-            violations=violations,
+        return _finish(
+            GateResult(
+                original=original,
+                spoken=SAFE_SUBSTITUTE,
+                suppressed=True,
+                violations=violations,
+            )
         )
-        logger.warning("%s", result.log_line)
-        return result
 
     time_hits = [match.group(0) for match in _TIME_RE.finditer(spoken)]
     time_hits.extend(match.group(0) for match in _CLOCK_RE.finditer(spoken))
     ungrounded_times = [hit for hit in time_hits if not _known(hit, facts.times)]
     if ungrounded_times:
         violations.append("time")
-        result = GateResult(
-            original=original,
-            spoken=SAFE_SUBSTITUTE,
-            suppressed=True,
-            violations=violations,
+        return _finish(
+            GateResult(
+                original=original,
+                spoken=SAFE_SUBSTITUTE,
+                suppressed=True,
+                violations=violations,
+            )
         )
-        logger.warning("%s", result.log_line)
-        return result
 
     suppressed = bool(violations) or spoken != original
-    result = GateResult(
-        original=original,
-        spoken=spoken,
-        suppressed=suppressed,
-        violations=violations,
+    return _finish(
+        GateResult(
+            original=original,
+            spoken=spoken,
+            suppressed=suppressed,
+            violations=violations,
+        )
     )
-    if suppressed:
-        logger.warning("%s", result.log_line)
-    return result
+
+
+async def grounded_realtime_transcription(
+    text: AsyncIterable[str],
+    *,
+    facts: SpeakableFacts,
+    commit: Callable[[str], str],
+    on_rewrite: Callable[[str], Any] | None = None,
+) -> AsyncIterable[str]:
+    """Yield gated captions for a Realtime turn. Speak substitutes via on_rewrite.
+
+    OpenAI Realtime audio is already in flight here. Yielding rewritten text
+    updates the published transcript; it does not synthesize speech. Callers
+    must interrupt ungrounded audio and speak the substitute with
+    generate_reply — session.say() raises without a TTS plugin.
+
+    Docs: https://docs.livekit.io/agents/logic/nodes/
+          https://docs.livekit.io/agents/models/realtime/#scripted-speech-output
+    """
+    accumulated: list[str] = []
+    async for chunk in text:
+        accumulated.append(chunk if isinstance(chunk, str) else str(chunk))
+        so_far = "".join(accumulated)
+        preview = gate_utterance(so_far, facts, log=False)
+        if preview.spoken != so_far:
+            spoken = commit(so_far)
+            if on_rewrite is not None:
+                on_rewrite(spoken)
+            yield spoken
+            async for _ in text:
+                pass
+            return
+    yield "".join(accumulated)
 
 
 def grounding_violation_packet(

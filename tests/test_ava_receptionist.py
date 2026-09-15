@@ -1,5 +1,6 @@
 """Ava Realtime voice defaults, barge-in, tools, and branch greeting."""
 
+import asyncio
 import inspect
 from datetime import date
 from types import SimpleNamespace
@@ -387,3 +388,103 @@ def test_on_enter_greets_web_and_sip() -> None:
     assert "inbound_greeting_instructions" in source
     assert "greet_on_enter" in source
     assert "EMERGENCY_000_SCRIPT" in inspect.getsource(AvaReceptionist)
+    assert "speak_scripted" in inspect.getsource(AvaReceptionist.on_user_turn_completed)
+    node = inspect.getsource(AvaReceptionist.transcription_node)
+    assert "grounded_realtime_transcription" in node
+    assert "_on_ungrounded_rewrite" in node
+
+
+REALTIME_SAY_ERROR = (
+    "trying to generate speech from text without a TTS model or a "
+    "RealtimeSession that supports say(); add a TTS model to AgentSession to enable say()"
+)
+
+
+class _FakeRealtimeSession:
+    """OpenAI Realtime: say() raises the production RuntimeError."""
+
+    def __init__(self) -> None:
+        self.tts = None
+        self.llm = SimpleNamespace(capabilities=SimpleNamespace(supports_say=False))
+        self.say_calls: list[object] = []
+        self.replies: list[dict] = []
+        self.interrupts = 0
+
+    def say(self, *args: object, **kwargs: object) -> None:
+        self.say_calls.append({"args": args, "kwargs": kwargs})
+        raise RuntimeError(REALTIME_SAY_ERROR)
+
+    def interrupt(self) -> None:
+        self.interrupts += 1
+
+    def generate_reply(self, **kwargs: object) -> SimpleNamespace:
+        self.replies.append(dict(kwargs))
+        return SimpleNamespace()
+
+
+@pytest.mark.asyncio
+async def test_transcription_node_speaks_substitute_on_realtime_without_say(
+    monkeypatch,
+) -> None:
+    """Old path: session.say(spoken) raises, caller hears a fragment then silence.
+
+    Realtime-safe path: interrupt ungrounded audio, yield the substitute, and
+    generate_reply so the full safe sentence is audible.
+    Docs: https://docs.livekit.io/agents/models/realtime/#scripted-speech-output
+    """
+    from livekit.agents import ModelSettings
+
+    from booking import MemoryBookingProvider
+    from call_state import CallState
+    from grounding import CONFIRM_SUBSTITUTE
+    from practice import PracticeClient
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    ava = AvaReceptionist(
+        state=CallState(branch="shellharbour", today=date(2026, 9, 15)),
+        booking=MemoryBookingProvider(PracticeClient(mode="mock")),
+    )
+    session = _FakeRealtimeSession()
+    ava._speech_session = session
+
+    async def _ungrounded():
+        yield "That's confirmed — you're booked with Dr Maryam Kalo."
+
+    yielded: list[str] = []
+    async for chunk in ava.transcription_node(_ungrounded(), ModelSettings()):
+        yielded.append(chunk)
+    if ava._speech_tasks:
+        await asyncio.gather(*ava._speech_tasks)
+
+    assert yielded == [CONFIRM_SUBSTITUTE]
+    assert session.interrupts == 1
+    assert session.replies, "substitute must be spoken via generate_reply on Realtime"
+    instructions = str(session.replies[0].get("instructions") or "")
+    assert CONFIRM_SUBSTITUTE in instructions
+    assert "Maryam" not in "".join(yielded)
+    assert "you're booked" not in "".join(yielded).lower()
+    assert session.say_calls == []
+
+
+@pytest.mark.asyncio
+async def test_emergency_script_uses_generate_reply_on_realtime(monkeypatch) -> None:
+    from booking import MemoryBookingProvider
+    from call_state import CallState
+    from practice import PracticeClient
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    ava = AvaReceptionist(
+        state=CallState(branch="shellharbour", today=date(2026, 9, 15)),
+        booking=MemoryBookingProvider(PracticeClient(mode="mock")),
+    )
+    session = _FakeRealtimeSession()
+    ava._speech_session = session
+    ava.state.urgency_level = "emergency_000"
+
+    from ava_receptionist import EMERGENCY_000_SCRIPT
+    from filler_ladder import speak_scripted
+
+    await speak_scripted(session, EMERGENCY_000_SCRIPT, kind="script")
+    assert session.replies
+    assert EMERGENCY_000_SCRIPT in str(session.replies[0].get("instructions") or "")
+    assert session.say_calls == []

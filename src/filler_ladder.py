@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
 import math
 import random
@@ -162,6 +163,112 @@ def _remaining_to_word_boundary(elapsed: float, word_s: float) -> float:
     return max(0.0, min(word_s, remaining))
 
 
+REALTIME_SAY_UNSUPPORTED = (
+    "trying to generate speech from text without a TTS model or a "
+    "RealtimeSession that supports say()"
+)
+
+
+def is_say_unsupported(exc: BaseException) -> bool:
+    return isinstance(exc, RuntimeError) and "without a TTS model" in str(exc)
+
+
+def session_supports_say(session: Any) -> bool:
+    """True when session.say can synthesize. OpenAI Realtime cannot.
+
+    Docs: https://docs.livekit.io/agents/multimodality/audio/#session-say
+          https://docs.livekit.io/agents/models/realtime/#scripted-speech-output
+    """
+    if getattr(session, "tts", None):
+        return True
+    llm = getattr(session, "llm", None)
+    caps = getattr(llm, "capabilities", None) if llm is not None else None
+    return bool(getattr(caps, "supports_say", False))
+
+
+def scripted_speech_instructions(text: str, *, kind: str = "script") -> str:
+    if kind == "filler":
+        return (
+            "Cover the pause. Say exactly this and nothing else, "
+            f"in character: {text} Do not invent a diary result."
+        )
+    return (
+        "Say exactly this and nothing else, in character: "
+        f"{text} Do not add times, dentist names, fees, or booking confirmations."
+    )
+
+
+def kick_scripted_speech(
+    session: Any,
+    text: str,
+    *,
+    allow_interruptions: bool = True,
+    kind: str = "script",
+) -> Any:
+    """Start scripted speech. say() only when TTS/Realtime say exists.
+
+    OpenAI Realtime AgentSession.say raises RuntimeError. generate_reply is
+    the documented Realtime path (exact wording is not guaranteed).
+    Docs: https://docs.livekit.io/agents/models/realtime/#scripted-speech-output
+    """
+    handle: Any = None
+    if session_supports_say(session):
+        say = getattr(session, "say", None)
+        if callable(say):
+            try:
+                handle = say(text, allow_interruptions=allow_interruptions)
+            except TypeError:
+                try:
+                    handle = say(text)
+                except Exception:
+                    handle = None
+            except RuntimeError as exc:
+                if not is_say_unsupported(exc):
+                    raise
+                handle = None
+            except Exception:
+                handle = None
+    if handle is not None:
+        return handle
+    generate = getattr(session, "generate_reply", None)
+    if not callable(generate):
+        raise RuntimeError(REALTIME_SAY_UNSUPPORTED)
+    instructions = scripted_speech_instructions(text, kind=kind)
+    try:
+        return generate(
+            instructions=instructions,
+            allow_interruptions=allow_interruptions,
+        )
+    except TypeError:
+        return generate(instructions=instructions)
+
+
+async def speak_scripted(
+    session: Any,
+    text: str,
+    *,
+    allow_interruptions: bool = True,
+    kind: str = "script",
+) -> Any:
+    """Await scripted speech when the handle supports it."""
+    handle = kick_scripted_speech(
+        session,
+        text,
+        allow_interruptions=allow_interruptions,
+        kind=kind,
+    )
+    if handle is None:
+        return None
+    if inspect.isawaitable(handle):
+        return await handle
+    wait = getattr(handle, "wait_for_playout", None)
+    if callable(wait):
+        result = wait()
+        if inspect.isawaitable(result):
+            await result
+    return handle
+
+
 def offset_with_jitter(
     base_ms: int,
     *,
@@ -179,10 +286,10 @@ def offset_with_jitter(
 
 
 class SessionSpeaker:
-    """Kick filler audio via session.say, falling back to generate_reply on Realtime.
+    """Kick filler audio via say() when TTS exists, else generate_reply.
 
     Docs: https://docs.livekit.io/agents/multimodality/audio/#session-say
-          Realtime models need TTS for say(); otherwise generate_reply.
+          https://docs.livekit.io/agents/models/realtime/#scripted-speech-output
     """
 
     def __init__(
@@ -217,31 +324,16 @@ class SessionSpeaker:
         except Exception:
             logger.exception("could not subscribe to speech_created")
 
-        kicked = False
         try:
-            say = getattr(self.session, "say", None)
-            if callable(say):
-                self._handle = say(text, allow_interruptions=allow_interruptions)
-                kicked = True
-        except TypeError:
-            try:
-                self._handle = self.session.say(text)
-                kicked = True
-            except Exception:
-                kicked = False
+            self._handle = kick_scripted_speech(
+                self.session,
+                text,
+                allow_interruptions=allow_interruptions,
+                kind="filler",
+            )
         except Exception:
-            kicked = False
-
-        if not kicked:
-            try:
-                self._handle = self.session.generate_reply(
-                    instructions=(
-                        "Cover the pause. Say exactly this and nothing else, "
-                        f"in character: {text} Do not invent a diary result."
-                    )
-                )
-            except Exception:
-                logger.exception("filler utter failed")
+            logger.exception("filler utter failed")
+            self._handle = None
 
         with contextlib.suppress(TimeoutError, Exception):
             await asyncio.wait_for(audio_started.wait(), timeout=0.35)

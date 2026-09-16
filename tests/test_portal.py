@@ -247,10 +247,15 @@ def test_call_button_cannot_open_a_second_room() -> None:
     # talking into a room nobody is listening to.
     assert "await room.disconnect();" in js
 
-    # Remote audio elements are replaced, never stacked.
-    assert (
-        '$("remote-audio").innerHTML = "";\n      $("remote-audio").appendChild' in js
-    )
+    # Every remote audio track plays. Ava publishes her voice AND an ambience
+    # track; clearing the container on each subscription let the ambience,
+    # which arrives last, delete her voice, so web callers heard nothing.
+    subscribed = js[
+        js.index("RoomEvent.TrackSubscribed") : js.index("RoomEvent.TrackUnsubscribed")
+    ]
+    assert 'innerHTML = ""' not in subscribed
+    assert "data-track" in subscribed or "dataset.track" in subscribed
+    assert "RoomEvent.TrackUnsubscribed" in js
 
 
 def test_microphone_is_acquired_before_a_token_is_minted() -> None:
@@ -279,3 +284,14 @@ def test_microphone_errors_are_actionable() -> None:
     assert "NotReadableError" in js  # busy in another app
     assert "isSecureContext" in js  # http:// page
     assert "padlock" in js.lower()
+
+
+def test_desk_assets_are_never_served_stale() -> None:
+    """A deploy must reach the browser on the next load.
+
+    With no Cache-Control header, browsers cached app.js heuristically and kept
+    running the old code, so fixes appeared not to work.
+    """
+    http, _practice = _client()
+    for path in ("/", "/static/app.js", "/static/styles.css"):
+        assert http.get(path).headers.get("cache-control") == "no-cache", path

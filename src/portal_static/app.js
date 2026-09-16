@@ -496,7 +496,7 @@ function unlockAudio(room, element) {
         await room.startAudio();
         document.querySelectorAll("#remote-audio audio").forEach((a) => a.play().catch(() => {}));
         btn.classList.add("hidden");
-        setCallStatus(`Connected to Ava at ${currentBranch().trading_name}. Speak normally.`);
+        setCallStatus("Connected to Ava at Illawarra Dentists. Speak normally.");
       } catch {
         setCallStatus("Sound is blocked for this site. Allow sound in the browser, then call again.");
       }
@@ -506,7 +506,7 @@ function unlockAudio(room, element) {
     try {
       await room.startAudio();
       if (element) await element.play();
-      setCallStatus(`Connected to Ava at ${currentBranch().trading_name}. Speak normally.`);
+      setCallStatus("Connected to Ava at Illawarra Dentists. Speak normally.");
     } catch {
       setCallStatus("Your browser is blocking audio. Allow sound for this site, then call again.");
     }
@@ -561,13 +561,18 @@ async function callAva() {
     // Claim the slot before connecting so a click landing mid-connect is
     // refused, and so the handlers below can tell live events from stale ones.
     state.room = room;
-    room.on(RoomEvent.TrackSubscribed, (track) => {
+    room.on(RoomEvent.TrackSubscribed, (track, publication) => {
       if (track.kind !== "audio" || state.room !== room) return;
-      // Replace, never stack: one audible element at a time.
+      // One element per track. Ava publishes two: her voice (roomio_audio) and
+      // the office ambience (background_audio). Clearing the container on each
+      // arrival meant the ambience, which subscribes last, deleted her voice -
+      // callers heard a -47 dB murmur and nothing else.
+      const key = publication?.trackSid || track.sid || track.mediaStreamTrack?.id;
+      if ($("remote-audio").querySelector(`audio[data-track="${key}"]`)) return;
       const el = track.attach();
+      el.dataset.track = key;
       el.autoplay = true;
       el.playsInline = true;
-      $("remote-audio").innerHTML = "";
       $("remote-audio").appendChild(el);
       // autoplay alone is not enough: the browser can refuse, and then the
       // transcript keeps scrolling while the caller hears nothing at all.
@@ -575,6 +580,12 @@ async function callAva() {
       if (played && typeof played.catch === "function") {
         played.catch(() => unlockAudio(room, el));
       }
+    });
+    room.on(RoomEvent.TrackUnsubscribed, (track, publication) => {
+      if (track.kind !== "audio") return;
+      const key = publication?.trackSid || track.sid || track.mediaStreamTrack?.id;
+      track.detach().forEach((el) => el.remove());
+      $("remote-audio").querySelector(`audio[data-track="${key}"]`)?.remove();
     });
     room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
       if (state.room !== room) return;
@@ -591,7 +602,7 @@ async function callAva() {
     await room.localParticipant.setMicrophoneEnabled(true);
     $("hang-up").classList.remove("hidden");
     setWaveState(true);
-    setCallStatus(`Connected to Ava at ${currentBranch().trading_name}. Speak normally.`);
+    setCallStatus("Connected to Ava at Illawarra Dentists. Speak normally.");
   } catch (error) {
     // Drop a half-connected room, otherwise its dispatched agent keeps talking
     // into a room nobody is listening to.

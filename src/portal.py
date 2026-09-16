@@ -388,6 +388,18 @@ def create_app(
         )
 
     if STATIC_DIR.exists():
+
+        @app.middleware("http")
+        async def revalidate_desk_assets(request: Request, call_next):
+            # Without a Cache-Control header browsers cache the desk heuristically
+            # and keep running a stale app.js after a deploy - staff saw fixed
+            # bugs for hours. no-cache still allows cheap 304s via the ETag.
+            response = await call_next(request)
+            path = request.url.path
+            if path == "/" or path.startswith("/static/"):
+                response.headers["Cache-Control"] = "no-cache"
+            return response
+
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
         @app.get("/")

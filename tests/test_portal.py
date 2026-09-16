@@ -248,4 +248,6 @@ def test_call_button_cannot_open_a_second_room() -> None:
     assert "await room.disconnect();" in js
 
     # Remote audio elements are replaced, never stacked.
-    assert '$("remote-audio").innerHTML = "";\n      $("remote-audio").appendChild' in js
+    assert (
+        '$("remote-audio").innerHTML = "";\n      $("remote-audio").appendChild' in js
+    )

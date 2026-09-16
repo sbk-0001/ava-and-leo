@@ -307,3 +307,32 @@ def test_portal_requirements_match_base_dependencies() -> None:
         if line.strip() and not line.startswith("#")
     }
     assert wanted == listed
+
+
+async def test_shared_diary_placeholders_are_renamed_and_saved() -> None:
+    from practice import Slot
+
+    store = MemoryStateStore()
+    await store.save(
+        DIARY_KEY,
+        {
+            "patients": {},
+            "slots": {
+                "s1": Slot(
+                    slot_id="s1",
+                    branch_id="woonona",
+                    date="2026-09-21",
+                    time="08:00",
+                    clinician="available dentist",
+                ).__dict__
+            },
+            "bookings": {},
+            "messages": [],
+        },
+    )
+    client = PracticeClient(mode="mock", store=store)
+    await client.refresh()
+    assert client.slots["s1"].clinician == "Dr Beena Kurian"
+    snap = await store.load(DIARY_KEY)
+    assert snap.payload["slots"]["s1"]["clinician"] == "Dr Beena Kurian"
+    assert client.store_version == snap.version

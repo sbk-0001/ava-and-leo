@@ -17,7 +17,13 @@ from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from persona import get_branch
-from practice import Booking, PracticeClient, get_shared_practice, practice_from_env
+from practice import (
+    PLACEHOLDER_DENTISTS,
+    Booking,
+    PracticeClient,
+    get_shared_practice,
+    practice_from_env,
+)
 
 logger = logging.getLogger("booking")
 
@@ -326,7 +332,7 @@ def filter_slots_by_clinician(
     ]
 
 
-PLACEHOLDER_CLINICIANS = frozenset({"available dentist", "any", "any dentist", "tbc"})
+PLACEHOLDER_CLINICIANS = PLACEHOLDER_DENTISTS
 
 
 def spoken_two_slot_offer(

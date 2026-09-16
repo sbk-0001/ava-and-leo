@@ -140,8 +140,29 @@ BRANCHES: dict[str, Branch] = {
         suburb="Dapto",
         address="35 Baan Baan Street, Dapto NSW 2530",
         phone="(02) 4288 0737",
+        # daptodentists.com.au, home + about-us, checked 17 Sep 2026.
+        parking="Dedicated carpark at the rear of the building.",
+        dentists=(
+            "Dr Beena Kurian",
+            "Dr Irena Stojkovski",
+            "Dr Pat Pandey",
+            "Dr Ayesha Panta",
+            "Dr Mohit Tolani",
+            "Dr Amy Min",
+            "Dr Omar Ahsan",
+        ),
+        clinicians=(
+            Clinician(name="Dr Beena Kurian", role="Principal dentist"),
+            Clinician(name="Dr Irena Stojkovski", role="Dentist"),
+            Clinician(name="Dr Pat Pandey", role="Dentist"),
+            Clinician(name="Dr Ayesha Panta", role="Dentist"),
+            Clinician(name="Dr Mohit Tolani", role="Dentist"),
+            Clinician(name="Dr Amy Min", role="Associate dentist"),
+            Clinician(name="Dr Omar Ahsan", role="Dentist"),
+        ),
         website="https://daptodentists.com.au/",
-        # Diary seed hours only — not published in the brief, never spoken as fact.
+        # Spoken hours stay VERIFY: the site gives both 5pm and 6pm weekday
+        # closing. These are diary seed hours only.
         clinic_hours=ClinicHours(
             weekday_open="08:00",
             weekday_close="17:00",
@@ -154,6 +175,26 @@ BRANCHES: dict[str, Branch] = {
         suburb="Woonona",
         address="379 Princes Highway, Woonona NSW 2517",
         phone="(02) 4284 4486",
+        # woononadentists.com.au, home + about-us, checked 17 Sep 2026.
+        parking=(
+            "Parking at the rear of the practice, close to the local IGA "
+            "(entry through Haddon Lane)."
+        ),
+        hours="Mon to Fri 8:00am - 6:00pm. Saturday 8:00am - 5:00pm.",
+        dentists=(
+            "Dr Beena Kurian",
+            "Dr Natasha Khushalani",
+            "Dr Abha Verma",
+            "Dr Ayesha Panta",
+            "Dr Chin Valsan",
+        ),
+        clinicians=(
+            Clinician(name="Dr Beena Kurian", role="Principal dentist"),
+            Clinician(name="Dr Natasha Khushalani", role="Associate dentist"),
+            Clinician(name="Dr Abha Verma", role="Associate dentist"),
+            Clinician(name="Dr Ayesha Panta", role="Associate dentist"),
+            Clinician(name="Dr Chin Valsan", role="Associate dentist"),
+        ),
         website="https://woononadentists.com.au/",
         clinic_hours=ClinicHours(
             weekday_open="08:00",

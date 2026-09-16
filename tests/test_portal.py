@@ -24,8 +24,9 @@ def test_portal_lists_branch_facts() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["trading_name"] == "Dapto Dentists"
-    assert body["parking"] == "VERIFY"
-    assert body["dentists"] == []
+    assert "rear of the building" in body["parking"]
+    assert "Dr Irena Stojkovski" in body["dentists"]
+    assert body["hours"] == "VERIFY"
     assert "35 Baan Baan Street" in body["address"]
 
 

@@ -244,7 +244,7 @@ def test_seeded_diary_uses_real_dentists_and_branch_hours() -> None:
         if slot.branch_id == "dapto" and slot.date == monday
     ]
     assert dapto_slots
-    assert all(slot.clinician == "available dentist" for slot in dapto_slots)
+    assert all(slot.clinician in BRANCHES["dapto"].dentists for slot in dapto_slots)
 
     woonona_slots = [
         slot
@@ -252,7 +252,7 @@ def test_seeded_diary_uses_real_dentists_and_branch_hours() -> None:
         if slot.branch_id == "woonona" and slot.date == monday
     ]
     assert woonona_slots
-    assert all(slot.clinician == "available dentist" for slot in woonona_slots)
+    assert all(slot.clinician in BRANCHES["woonona"].dentists for slot in woonona_slots)
 
     saturday = (today + timedelta(days=5)).isoformat()
     sh_sat = [
@@ -290,3 +290,46 @@ def test_practice_from_env_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     forced = practice_from_env(is_telephony=True, persist=False)
     assert forced.mode == "mock"
     reset_shared_practice()
+
+
+def test_seeded_dapto_and_woonona_slots_have_real_dentists() -> None:
+    client = PracticeClient(mode="mock")
+    seed_mock_diary(client, today=date(2026, 9, 14), days=2)
+    for branch_id in ("dapto", "woonona"):
+        names = {s.clinician for s in client.slots.values() if s.branch_id == branch_id}
+        assert names and names <= set(BRANCHES[branch_id].dentists)
+
+
+def test_old_placeholder_slots_get_named_dentists_and_keep_bookings() -> None:
+    """The diary already in use was seeded with "available dentist"."""
+    from practice import Booking, assign_named_dentists
+
+    client = PracticeClient(mode="mock")
+    for index, time in enumerate(("08:00", "08:30", "09:00")):
+        client.seed_slot(
+            slot_id=f"slot_dapto_2026-09-21_{time}_available-dentist",
+            branch_id="dapto",
+            date="2026-09-21",
+            time=time,
+            clinician="available dentist",
+            taken=index == 1,
+        )
+    client.bookings["bkg_1"] = Booking(
+        booking_id="bkg_1",
+        slot_id="slot_dapto_2026-09-21_08:30_available-dentist",
+        branch_id="dapto",
+        patient_id="pat_demo_1",
+        date="2026-09-21",
+        time="08:30",
+        clinician="available dentist",
+        reason="check up",
+    )
+
+    changed = assign_named_dentists(client)
+    assert changed == 3
+    dentists = BRANCHES["dapto"].dentists
+    by_time = {s.time: s.clinician for s in client.slots.values()}
+    assert by_time == {"08:00": dentists[0], "08:30": dentists[1], "09:00": dentists[2]}
+    assert client.bookings["bkg_1"].clinician == dentists[1]
+    assert client.slots["slot_dapto_2026-09-21_08:30_available-dentist"].taken
+    assert assign_named_dentists(client) == 0

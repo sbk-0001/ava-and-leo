@@ -67,25 +67,54 @@ def test_shellharbour_facts_match_brief() -> None:
     assert "Centre Health Dental" in branch.notes
 
 
-def test_dapto_and_woonona_do_not_invent_facts() -> None:
+DAPTO_DENTISTS = (
+    "Dr Beena Kurian",
+    "Dr Irena Stojkovski",
+    "Dr Pat Pandey",
+    "Dr Ayesha Panta",
+    "Dr Mohit Tolani",
+    "Dr Amy Min",
+    "Dr Omar Ahsan",
+)
+WOONONA_DENTISTS = (
+    "Dr Beena Kurian",
+    "Dr Natasha Khushalani",
+    "Dr Abha Verma",
+    "Dr Ayesha Panta",
+    "Dr Chin Valsan",
+)
+
+
+def test_dapto_and_woonona_name_their_dentists() -> None:
+    """The desk showed no dentists for Dapto or Woonona and the diary said
+    "available dentist". Both official sites name them (checked 17 Sep 2026:
+    daptodentists.com.au and woononadentists.com.au, home + about-us)."""
     dapto = get_branch("dapto")
     assert dapto.trading_name == "Dapto Dentists"
     assert "35 Baan Baan Street" in dapto.address
     assert "4288 0737" in dapto.phone
-    assert dapto.parking == VERIFY
-    assert dapto.hours == VERIFY
-    assert dapto.dentists == ()
+    assert dapto.dentists == DAPTO_DENTISTS
+    assert "rear of the building" in dapto.parking
     assert "Mall Lane" not in dapto.parking
-    assert "Beena" not in " ".join(dapto.dentists)
+    # The Dapto site gives two different weekday closing times - not spoken.
+    assert dapto.hours == VERIFY
 
     woonona = get_branch("woonona")
     assert "379 Princes Highway" in woonona.address
     assert "4284 4486" in woonona.phone
-    assert woonona.parking == VERIFY
-    assert woonona.hours == VERIFY
-    assert woonona.dentists == ()
-    assert "Haddon" not in woonona.parking
-    assert "IGA" not in woonona.parking
+    assert woonona.dentists == WOONONA_DENTISTS
+    assert "Haddon Lane" in woonona.parking
+    assert "IGA" in woonona.parking
+    assert "6:00pm" in woonona.hours and "5:00pm" in woonona.hours
+
+    for branch in (dapto, woonona):
+        principal = [c for c in branch.clinicians if "Principal" in c.role]
+        assert [c.name for c in principal] == ["Dr Beena Kurian"]
+        assert {c.name for c in branch.clinicians} == set(branch.dentists)
+    # Reviewers' dentists are not staff.
+    everyone = " ".join((*DAPTO_DENTISTS, *WOONONA_DENTISTS))
+    for outsider in ("Ivan Young", "Paul Blatch", "McGovern"):
+        assert outsider not in everyone
 
 
 def test_unknown_branch_falls_back_to_shellharbour() -> None:

@@ -567,6 +567,8 @@ class PracticeClient:
         self._apply_payload(snapshot.payload or {})
         backfill_demo_patient_dobs(self)
         self.store_version = snapshot.version
+        if assign_named_dentists(self):
+            await self.persist()
 
     def update_patient_mobile(
         self,
@@ -689,6 +691,35 @@ def seed_mock_diary(
     return created
 
 
+PLACEHOLDER_DENTISTS = frozenset({"available dentist", "any", "any dentist", "tbc"})
+
+
+def assign_named_dentists(client: PracticeClient) -> int:
+    """Give placeholder diary slots a real dentist, the way seeding would.
+
+    Dapto and Woonona were seeded as "available dentist" before their dentists
+    were known. The slot id stays the same so bookings keep pointing at it.
+    """
+    per_day: dict[tuple[str, str], list[str]] = {}
+    for slot in client.slots.values():
+        per_day.setdefault((slot.branch_id, slot.date), []).append(slot.time)
+    renamed: dict[str, str] = {}
+    for slot in client.slots.values():
+        if slot.clinician.strip().lower() not in PLACEHOLDER_DENTISTS:
+            continue
+        branch = BRANCHES.get(slot.branch_id)
+        dentists = [n for n in (branch.dentists if branch else ()) if n != VERIFY]
+        if not dentists:
+            continue
+        times = sorted(set(per_day[(slot.branch_id, slot.date)]))
+        slot.clinician = dentists[times.index(slot.time) % len(dentists)]
+        renamed[slot.slot_id] = slot.clinician
+    for booking in client.bookings.values():
+        if booking.slot_id in renamed:
+            booking.clinician = renamed[booking.slot_id]
+    return len(renamed)
+
+
 def backfill_demo_patient_dobs(client: PracticeClient) -> None:
     """Fill empty DOBs on persisted demo patients so verification can succeed."""
     by_phone = {_norm_phone(phone): dob for _pid, _name, phone, dob in DEMO_PATIENTS}
@@ -759,7 +790,7 @@ def practice_from_env(
         if not client.slots:
             seed_mock_diary(client)
             client.save()
-        elif any(
+        elif assign_named_dentists(client) or any(
             client.patients[pid].date_of_birth != dob for pid, dob in before.items()
         ):
             client.save()

@@ -290,3 +290,20 @@ def test_vercel_entrypoint_exposes_the_portal_app() -> None:
     function = config["functions"]["app.py"]
     assert function["maxDuration"] >= 120
     assert "tests/**" in function["excludeFiles"]
+
+
+def test_portal_requirements_match_base_dependencies() -> None:
+    """Vercel installs requirements-portal.txt; it must cover the base deps."""
+    import tomllib
+
+    base = tomllib.loads((REPO / "pyproject.toml").read_text())["project"][
+        "dependencies"
+    ]
+    wanted = {dep.split(">")[0].split("[")[0].strip().lower() for dep in base}
+    lines = (REPO / "requirements-portal.txt").read_text().splitlines()
+    listed = {
+        line.split(">")[0].split("[")[0].strip().lower()
+        for line in lines
+        if line.strip() and not line.startswith("#")
+    }
+    assert wanted == listed

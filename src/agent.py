@@ -518,7 +518,7 @@ server = AgentServer()
 server.setup_fnc = prewarm
 
 
-@server.rtc_session(agent_name="ava-and-leo")
+@server.rtc_session(agent_name=os.getenv("AVA_AGENT_NAME", "ava-and-leo"))
 async def my_agent(ctx: JobContext):
     metadata = parse_job_metadata(getattr(ctx.job, "metadata", None))
     phone_number = metadata.get("phone_number")

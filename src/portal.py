@@ -31,7 +31,7 @@ from practice import PracticeClient, get_shared_practice
 
 load_dotenv(".env.local")
 
-AGENT_NAME = "ava-and-leo"
+AGENT_NAME = os.getenv("AVA_AGENT_NAME", "ava-and-leo")
 STATIC_DIR = Path(__file__).parent / "portal_static"
 COOKIE_NAME = "ava_portal"
 

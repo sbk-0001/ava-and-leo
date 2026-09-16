@@ -72,6 +72,10 @@ _FOREIGN_HINTS = (
 )
 IN_FLIGHT_SHORT_CHARS = 12
 LOW_CONFIDENCE = 0.45
+# Below this, non-Latin text is a scrap - background TV, a stray syllable, a
+# mis-transcription. At or above it someone is genuinely talking to us in
+# another language and deserves an English answer rather than silence.
+NON_ENGLISH_NOTICE_CHARS = 12
 
 
 @dataclass(frozen=True)
@@ -81,6 +85,7 @@ class TurnVerdict:
     barge: bool = False
     task: bool = False
     name_correction: str | None = None
+    needs_english_notice: bool = False
 
     @property
     def affects_ladder(self) -> bool:
@@ -158,6 +163,11 @@ def classify_user_turn(
         return TurnVerdict(True, "filler_echo")
     lowered = raw.lower()
     if any(hint in lowered for hint in _FOREIGN_HINTS) or _has_non_latin_letters(raw):
+        # Ava is English-only, but a caller speaking another language must hear
+        # her say so. Staying silent reads as being ignored, and they just keep
+        # talking into dead air. Scraps and mid-tool chatter stay ignored.
+        if not tool_in_flight and len(raw) >= NON_ENGLISH_NOTICE_CHARS:
+            return TurnVerdict(False, "non_english_caller", needs_english_notice=True)
         return TurnVerdict(True, "non_task_language")
     if confidence is not None and confidence < LOW_CONFIDENCE:
         return TurnVerdict(True, "low_confidence")

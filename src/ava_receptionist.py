@@ -70,6 +70,11 @@ AVA_DEFAULT_VOICE = "marin"
 # Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/#turn-detection
 AVA_VAD_SILENCE_MS = 500
 AVA_SPEECH_SPEED = 0.9
+# Ava is an English-only receptionist. Without this the Realtime transcriber
+# guesses the language and returns English audio as Cyrillic or Chinese, which
+# the turn filter then drops as non_task_language and the caller gets silence.
+AVA_TRANSCRIPTION_LANGUAGE = "en"
+AVA_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
 AVA_TEMPERATURE = 0.95
 
 EMERGENCY_000_SCRIPT = (
@@ -109,6 +114,16 @@ def ava_realtime_model() -> openai.realtime.RealtimeModel:
         ),
     }
     signature = inspect.signature(openai.realtime.RealtimeModel.__init__)
+    if "input_audio_transcription" in signature.parameters:
+        try:
+            from openai.types.beta.realtime.session import InputAudioTranscription
+
+            kwargs["input_audio_transcription"] = InputAudioTranscription(
+                model=AVA_TRANSCRIPTION_MODEL,
+                language=AVA_TRANSCRIPTION_LANGUAGE,
+            )
+        except Exception:  # pragma: no cover - older SDK shapes
+            logger.exception("could not pin transcription language; using default")
     if "speed" in signature.parameters:
         kwargs["speed"] = AVA_SPEECH_SPEED
     if "temperature" in signature.parameters:

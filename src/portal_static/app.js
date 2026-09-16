@@ -486,7 +486,22 @@ async function acquireMicrophone() {
 // The browser can block audio playback even after a click. Say so, and let the
 // next click anywhere start it, rather than sitting silent with a live call.
 function unlockAudio(room, element) {
-  setCallStatus("Tap anywhere to hear Ava.");
+  setCallStatus("Your browser paused Ava's voice. Tap \u201cHear Ava\u201d.");
+  const btn = $("hear-ava");
+  if (btn) {
+    btn.classList.remove("hidden");
+    btn.onclick = async () => {
+      primeAudio();
+      try {
+        await room.startAudio();
+        document.querySelectorAll("#remote-audio audio").forEach((a) => a.play().catch(() => {}));
+        btn.classList.add("hidden");
+        setCallStatus(`Connected to Ava at ${currentBranch().trading_name}. Speak normally.`);
+      } catch {
+        setCallStatus("Sound is blocked for this site. Allow sound in the browser, then call again.");
+      }
+    };
+  }
   const start = async () => {
     try {
       await room.startAudio();
@@ -502,11 +517,33 @@ function unlockAudio(room, element) {
   document.addEventListener("touchstart", start, { once: false });
 }
 
+// Browsers only allow sound that starts from a click. The microphone prompt and
+// the token/connect round trips take long enough that, by the time Ava's audio
+// arrives, the click no longer counts - so playback was silently refused while
+// the transcript kept scrolling. Unlock audio synchronously, first thing, while
+// the click is still fresh.
+const SILENT_WAV =
+  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=";
+function primeAudio() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx) {
+      window.__bvAudioCtx = window.__bvAudioCtx || new Ctx();
+      if (window.__bvAudioCtx.state !== "running") window.__bvAudioCtx.resume();
+    }
+    const blip = new Audio(SILENT_WAV);
+    blip.play().catch(() => {});
+  } catch {
+    // nothing to unlock
+  }
+}
+
 async function callAva() {
   // One call at a time. Every /api/token mints a fresh room carrying its own
   // agent dispatch, so a second click while connecting or connected put two
   // Avas in two rooms and both of them talked over each other.
   if (state.connecting || state.room) return;
+  primeAudio();
   state.connecting = true;
   $("call-ava").disabled = true;
   setCallStatus("Connecting to Ava…");
@@ -550,6 +587,7 @@ async function callAva() {
     subscribeDeskFeed(room);
     await room.connect(token.url, token.token);
     await room.startAudio();
+    if (room.canPlaybackAudio === false) unlockAudio(room, null);
     await room.localParticipant.setMicrophoneEnabled(true);
     $("hang-up").classList.remove("hidden");
     setWaveState(true);
@@ -577,6 +615,7 @@ async function callAva() {
 
 async function hangUp(disconnect = true) {
   setWaveState(false);
+  if ($("hear-ava")) $("hear-ava").classList.add("hidden");
   // Clear the slot first so the Disconnected handler sees a stale room and does
   // not re-enter this function.
   const room = state.room;

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -17,6 +18,8 @@ from availability_cache import (
 )
 from booking import MemoryBookingProvider
 from practice import PracticeClient, seed_mock_diary
+
+SYDNEY = ZoneInfo("Australia/Sydney")
 
 
 class CountingProvider:
@@ -52,10 +55,15 @@ def _cache(
 ) -> tuple[CachedBookingProvider, CountingProvider]:
     client = PracticeClient(mode="mock")
     seed_mock_diary(client, today=today, days=14)
-    inner = CountingProvider(MemoryBookingProvider(client))
+    # Pin the inner provider to 07:00 on the seeded day. Unpinned it reads the
+    # live clock and drops the whole seeded window as past once real time moves
+    # beyond it, so these cache tests would fail by calendar date.
+    now = datetime.combine(today, time(7, 0), tzinfo=SYDNEY)
+    inner = CountingProvider(MemoryBookingProvider(client, now_fn=lambda: now))
     cache = CachedBookingProvider(
         inner,  # type: ignore[arg-type]
         today_fn=lambda: today,
+        now_fn=lambda: now,
         clock=lambda: 1000.0,
     )
     cache.inner = inner  # counting is the live source

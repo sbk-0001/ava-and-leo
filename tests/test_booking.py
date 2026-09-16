@@ -24,6 +24,12 @@ from practice import PracticeClient, seed_mock_diary
 
 SYDNEY = ZoneInfo("Australia/Sydney")
 
+# Frozen Sydney clock for the seeded diary. The mock diary starts at 08:00 on
+# 2026-09-15, so 07:00 that morning keeps every seeded slot in the future no
+# matter when the suite runs, and still sits inside the 24h cancellation window
+# for the 16:00 slot used by the fee test.
+SYDNEY_NOW = datetime(2026, 9, 15, 7, 0, tzinfo=SYDNEY)
+
 
 def _client() -> PracticeClient:
     client = PracticeClient(mode="mock")
@@ -31,9 +37,19 @@ def _client() -> PracticeClient:
     return client
 
 
+def _provider(client: PracticeClient | None = None) -> MemoryBookingProvider:
+    """Memory provider pinned to SYDNEY_NOW.
+
+    MemoryBookingProvider defaults now_fn to the live clock, so an unpinned
+    provider drops the seeded slots as past once real time moves beyond them
+    and these tests start failing by calendar date rather than by behaviour.
+    """
+    return MemoryBookingProvider(client or _client(), now_fn=lambda: SYDNEY_NOW)
+
+
 @pytest.mark.asyncio
 async def test_memory_provider_has_slots_for_all_three_branches() -> None:
-    provider = MemoryBookingProvider(_client())
+    provider = _provider()
     for branch in ("shellharbour", "dapto", "woonona"):
         result = await provider.check_availability(
             branch=branch,
@@ -57,7 +73,7 @@ async def test_memory_book_and_cancel_inside_24h_applies_fee() -> None:
         time="16:00",
         clinician="Dr Mohit Tolani",
     )
-    provider = MemoryBookingProvider(client)
+    provider = _provider(client)
     booked = await provider.book_appointment(
         branch="shellharbour",
         slot_id="slot-soon",
@@ -83,7 +99,7 @@ def test_cancellation_fee_window() -> None:
 @pytest.mark.asyncio
 async def test_lookup_patient_by_mobile() -> None:
     client = _client()
-    provider = MemoryBookingProvider(client)
+    provider = _provider(client)
     found = await provider.lookup_patient(mobile="0413000222")
     assert found["ok"] is True
     assert found["is_existing_patient"] is True
@@ -110,7 +126,7 @@ async def test_zavy360_stub_does_not_invent_slots() -> None:
 
 @pytest.mark.asyncio
 async def test_timeout_wrapper_recovers_without_fake_slots() -> None:
-    inner = MemoryBookingProvider(_client())
+    inner = _provider()
     wrapped = TimeoutBookingProvider(inner, force_timeout=True)
     result = await wrapped.book_appointment(
         branch="shellharbour",
@@ -126,7 +142,7 @@ async def test_timeout_wrapper_recovers_without_fake_slots() -> None:
 
 @pytest.mark.asyncio
 async def test_lookup_delay_only_slows_availability() -> None:
-    inner = MemoryBookingProvider(_client())
+    inner = _provider()
     paced = ToolPacingProvider(inner, lookup_delay_s=0.05)
     started = datetime.now(SYDNEY)
     result = await paced.check_availability(
@@ -141,7 +157,7 @@ async def test_lookup_delay_only_slows_availability() -> None:
 
 @pytest.mark.asyncio
 async def test_lookup_hang_does_not_return_fake_slots() -> None:
-    inner = MemoryBookingProvider(_client())
+    inner = _provider()
     paced = ToolPacingProvider(inner, lookup_hang_s=0.05)
     result = await paced.check_availability(
         branch="shellharbour",
@@ -155,7 +171,7 @@ async def test_lookup_hang_does_not_return_fake_slots() -> None:
 
 def test_job_metadata_wraps_and_seeds_cancel() -> None:
     client = PracticeClient(mode="mock")
-    inner = MemoryBookingProvider(client)
+    inner = _provider(client)
     wrapped = apply_job_booking_overrides(
         inner,
         {
@@ -263,7 +279,7 @@ def test_spoken_two_slot_offer() -> None:
             "clinician": "Dr Mohit Tolani",
         },
     ]
-    line = spoken_two_slot_offer(slots)
+    line = spoken_two_slot_offer(slots, now=SYDNEY_NOW)
     assert "Tuesday" in line
     assert "22" in line
     assert "10:00" in line or "ten" in line.lower()
@@ -339,7 +355,7 @@ async def test_check_availability_trims_past_morning_slots_at_sydney_1730() -> N
 
 @pytest.mark.asyncio
 async def test_memory_provider_filters_clinician() -> None:
-    provider = MemoryBookingProvider(_client())
+    provider = _provider()
     all_slots = await provider.check_availability(
         branch="shellharbour",
         appointment_type="root canal",
@@ -383,7 +399,7 @@ def test_canonical_slot_id_rejects_invented_ids() -> None:
 async def test_memory_provider_keeps_full_open_slot_list() -> None:
     client = PracticeClient(mode="mock")
     seed_mock_diary(client, today=date(2026, 9, 15), days=14)
-    provider = MemoryBookingProvider(client)
+    provider = _provider(client)
     result = await provider.check_availability(
         branch="shellharbour",
         appointment_type="check-up",

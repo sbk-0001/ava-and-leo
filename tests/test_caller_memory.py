@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -15,6 +16,13 @@ from caller_store import (
     upsert_from_booking,
 )
 from sip_utils import ani_from_participant, normalize_au_phone
+
+SYDNEY = ZoneInfo("Australia/Sydney")
+
+# Frozen Sydney clock. MemoryBookingProvider defaults now_fn to the live clock,
+# so an unpinned provider drops the seeded slots as past once real time moves
+# beyond them and these tests fail by calendar date, not by behaviour.
+SYDNEY_NOW = datetime(2026, 9, 15, 7, 0, tzinfo=SYDNEY)
 
 
 def test_mobile_given_once_second_ask_rejected() -> None:
@@ -106,7 +114,7 @@ async def test_unverified_lookup_does_not_confirm_patient(monkeypatch) -> None:
     )
     ava = AvaReceptionist(
         state=CallState(branch="shellharbour"),
-        booking=MemoryBookingProvider(client),
+        booking=MemoryBookingProvider(client, now_fn=lambda: SYDNEY_NOW),
         filler_player=Player(),
     )
 

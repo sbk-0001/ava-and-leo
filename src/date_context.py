@@ -28,6 +28,15 @@ _NEXT_WEEKDAY_RE = re.compile(
     r"\bnext\s+(" + "|".join(sorted(_WEEKDAYS, key=len, reverse=True)) + r")\b",
     re.I,
 )
+# A bare weekday - "Friday", "on Friday", "this Friday". Without this the phrase
+# fell through to parse_date_range, which does not know weekday names and
+# returned the default week-long window as if it had resolved it.
+_BARE_WEEKDAY_RE = re.compile(
+    r"^(?:on\s+|this\s+|this\s+coming\s+|come\s+)?("
+    + "|".join(sorted(_WEEKDAYS, key=len, reverse=True))
+    + r")$",
+    re.I,
+)
 
 
 def _ordinal(day: int) -> str:
@@ -274,6 +283,20 @@ def resolve_date_phrase(
                 },
             ]
             return payload
+
+    bare_weekday = _BARE_WEEKDAY_RE.match(lowered)
+    if bare_weekday:
+        target = _WEEKDAYS[bare_weekday.group(1).lower()]
+        ahead = (target - now.weekday()) % 7
+        that_day = now + timedelta(days=ahead)
+        payload["resolved"] = True
+        payload["start"] = that_day.isoformat()
+        payload["end"] = that_day.isoformat()
+        payload["spoken"] = format_sydney_date(that_day)
+        payload["note"] = (
+            "Use these ISO dates with check_availability. Do not invent another day."
+        )
+        return payload
 
     start, end = parse_date_range(raw, today=now)
     start_day = date.fromisoformat(start)

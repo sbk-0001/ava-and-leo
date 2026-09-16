@@ -441,14 +441,30 @@ def format_group_clinics() -> str:
     return "\n".join(lines)
 
 
+def format_who_works_where() -> str:
+    places: dict[str, list[str]] = {}
+    for branch in BRANCHES.values():
+        clinic = branch.trading_name.replace(" Dentists", "")
+        for name in branch.dentists:
+            if name and name != VERIFY:
+                places.setdefault(name, []).append(clinic)
+    return "\n".join(f"- {name}: {', '.join(where)}" for name, where in places.items())
+
+
 def format_clinic_facts(branch_id: str | None) -> str:
     branch = get_branch(branch_id)
     return (
         "CLINIC FACTS (quote only these; never extrapolate):\n"
         f"{format_branch_block(branch)}\n\n"
-        f"OTHER SITES IN THE GROUP:\n{format_group_clinics()}\n"
-        "You book at the current branch by default. Offer another site only if "
-        "the caller raises it or a suburb clearly suits one better."
+        f"OTHER SITES IN THE GROUP:\n{format_group_clinics()}\n\n"
+        f"WHO WORKS WHERE:\n{format_who_works_where()}\n\n"
+        f"You answer as {GROUP_TRADING_NAME}, the practice. Shellharbour, Dapto and "
+        "Woonona are its three clinics. Start with the clinic above, then move the "
+        "booking to another clinic when: the caller wants a dentist who works "
+        "there; they live or work closer to it; they prefer it; or this clinic "
+        "has nothing suitable soon. Run check_availability at that clinic "
+        "(branch=its id, clinician=the dentist if they named one) before "
+        "offering a time there."
     )
 
 

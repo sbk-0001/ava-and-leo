@@ -56,12 +56,15 @@ def test_ava_instructions_include_verbatim_plus_facts() -> None:
     assert Path(INSTRUCTIONS_PATH).is_file()
 
 
-def test_ava_never_promises_a_text_reminder() -> None:
-    """There is no SMS integration. She told Robert he'd get a text the day before."""
+def test_ava_mentions_a_text_only_when_one_is_queued() -> None:
+    """She once promised "a text the day before" with no SMS at all. Now a
+    confirmation text exists, but only the tool result may say it was sent."""
     text = INSTRUCTIONS_PATH.read_text(encoding="utf-8").lower()
     assert "text the day before" not in text
-    assert "text reminder" not in text
-    assert "never promise a text" in text
+    assert "confirmation_text" in text
+    assert "only then" in text
+    assert "never promise a reminder" in text
+    assert "never email" in text
 
 
 def test_instructions_require_reading_the_mobile_back() -> None:

@@ -187,3 +187,20 @@ def test_resolve_persona_defaults() -> None:
     assert (
         resolve_persona(is_telephony=False, env={"AGENT_PERSONA": "nope"}) == "generic"
     )
+
+
+def test_clinic_facts_say_who_works_where_and_when_to_offer_another_clinic() -> None:
+    """Illawarra Dentists answers; the three clinics are offered by the dentist
+    the caller wants, where they live, what they prefer, and availability."""
+    from persona import format_clinic_facts
+
+    facts = format_clinic_facts("shellharbour")
+    assert "WHO WORKS WHERE" in facts
+    assert "Dr Beena Kurian: Dapto, Woonona" in facts
+    assert "Dr Mohit Tolani: Shellharbour, Dapto" in facts
+    assert "Dr Chin Valsan: Woonona" in facts
+    assert "Offer another site only if" not in facts
+    lower = facts.lower()
+    for reason in ("dentist", "live", "prefer", "nothing suitable"):
+        assert reason in lower
+    assert "illawarra dentists" in lower

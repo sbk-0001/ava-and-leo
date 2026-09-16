@@ -797,6 +797,12 @@ async def my_agent(ctx: JobContext):
             await asyncio.wait_for(caller_store.flush(), timeout=5)
         except Exception:
             logger.exception("caller store flush failed")
+        flush_texts = getattr(agent, "flush_texts", None)
+        if flush_texts is not None:
+            try:
+                await flush_texts(timeout=5)
+            except Exception:
+                logger.exception("confirmation texts did not finish")
         await asyncio.to_thread(
             _save_call_to_supabase, session, ctx, agent_name, started_at, call_log
         )

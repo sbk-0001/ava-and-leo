@@ -63,6 +63,7 @@ from persona import (
 from phrase_pools import RECOVERY, STAGE_1, STAGE_5
 from realtime_hygiene import maybe_trim_realtime_context
 from sip_utils import find_sip_participant
+from sms import SmsSender, au_mobile_e164, booking_text, sms_sender_from_env
 from turn_filter import classify_user_turn
 
 try:
@@ -127,8 +128,18 @@ def book_confirm_facts(name: str, result: Mapping[str, Any]) -> str:
         f"Booking is locked for {name}. "
         f"Date {result.get('date') or ''}, time {result.get('time') or ''}, {who} "
         "Confirm those facts once and say they're all set. "
-        "Do not go quiet. Do not invent extra details. Do not promise a text or an email."
+        f"{confirmation_text_line(result)} "
+        "Do not go quiet. Do not invent extra details."
     )
+
+
+def confirmation_text_line(result: Mapping[str, Any]) -> str:
+    if result.get("confirmation_text") == "queued":
+        return (
+            "Tell them a text with the details is on its way to their mobile. "
+            "Never promise a reminder or an email."
+        )
+    return "Do not promise a text or an email."
 
 
 EMERGENCY_000_SCRIPT = (
@@ -226,8 +237,14 @@ class AvaReceptionist(Agent):
         caller_store: CallerStore | None = None,
         filler_player: FillerPlayer | None = None,
         dead_air: DeadAirMonitor | None = None,
+        sms: SmsSender | None | bool = True,
     ) -> None:
         self.state = state
+        # True = build from the environment; None/False = no texts at all.
+        self.sms: SmsSender | None = (
+            sms_sender_from_env() if sms is True else (sms or None)
+        )
+        self._text_tasks: set[asyncio.Task[Any]] = set()
         self.booking = booking
         self.transfer_to = transfer_to
         self.call_log = call_log
@@ -465,6 +482,55 @@ class AvaReceptionist(Agent):
         except Exception:
             logger.exception("locked-result speech kick failed")
 
+    def _queue_confirmation_text(self, kind: str, result: dict[str, Any]) -> None:
+        """Text the caller about a locked booking, without holding up the call.
+
+        Sets result["confirmation_text"] to queued / no_mobile / unavailable so
+        Ava only mentions a text that is really on its way.
+        """
+        if self.sms is None:
+            result["confirmation_text"] = "unavailable"
+            return
+        mobile = self.state.caller_mobile if self.state.mobile_confirmed else ""
+        to = au_mobile_e164(mobile)
+        if to is None:
+            result["confirmation_text"] = "no_mobile"
+            return
+        first = (self.state.caller_name or "").split(" ")[0] or None
+        facts = dict(result)
+        facts.setdefault("branch_id", self.state.branch)
+        text = booking_text(kind, facts, first_name=first)  # type: ignore[arg-type]
+        sender = self.sms
+
+        async def _send() -> None:
+            outcome = await sender.send(to, text)
+            self._log_tool(
+                "confirmation_text",
+                {
+                    "ok": bool(outcome.get("ok")),
+                    "kind": kind,
+                    "booking_id": result.get("booking_id"),
+                    "to": f"...{to[-3:]}",
+                    "error": outcome.get("error"),
+                },
+            )
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            result["confirmation_text"] = "unavailable"
+            return
+        task = loop.create_task(_send())
+        self._text_tasks.add(task)
+        task.add_done_callback(self._text_tasks.discard)
+        result["confirmation_text"] = "queued"
+
+    async def flush_texts(self, timeout: float = 8.0) -> None:
+        """Let queued texts finish (end of call, tests)."""
+        if not self._text_tasks:
+            return
+        await asyncio.wait(list(self._text_tasks), timeout=timeout)
+
     def _kick_book_confirm(
         self, context: RunContext, result: Mapping[str, Any]
     ) -> None:
@@ -481,7 +547,8 @@ class AvaReceptionist(Agent):
         facts = (
             f"The appointment for {name} is cancelled "
             f"(booking {result.get('booking_id') or ''}). "
-            "Confirm that once. Do not go quiet. Do not invent another booking."
+            f"Confirm that once. {confirmation_text_line(result)} "
+            "Do not go quiet. Do not invent another booking."
         )
         self._kick_locked_speech(context, facts)
 
@@ -1125,6 +1192,8 @@ class AvaReceptionist(Agent):
                 upsert_from_booking(self.caller_store, self.state, result)
             except Exception:
                 logger.exception("caller store write failed")
+            result = dict(result)
+            self._queue_confirmation_text("booked", result)
             if booking_is_locked(result):
                 self._kick_book_confirm(context, result)
         self._log_tool(
@@ -1168,6 +1237,9 @@ class AvaReceptionist(Agent):
             return moved
 
         result = await self._dispatch_with_ladder(context, _run)
+        if result.get("ok") and result.get("confirmed"):
+            result = dict(result)
+            self._queue_confirmation_text("moved", result)
         self._log_tool(
             "reschedule_appointment",
             result,
@@ -1227,6 +1299,8 @@ class AvaReceptionist(Agent):
             context, _run, in_flight="cancel_appointment"
         )
         if result.get("ok") and result.get("confirmed"):
+            result = dict(result)
+            self._queue_confirmation_text("cancelled", result)
             self._kick_cancel_confirm(context, result)
         self._log_tool("cancel_appointment", result, {"booking_id": booking_id})
         return result

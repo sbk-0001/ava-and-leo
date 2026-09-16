@@ -26,7 +26,7 @@ from grounding import (
     ingest_clock_fact,
     ingest_date_resolution,
 )
-from persona import BRANCHES, DEFAULT_BRANCH_ID, get_branch
+from persona import BRANCHES, DEFAULT_BRANCH_ID, GROUP_TRADING_NAME, get_branch
 from phrase_pools import ACKS, BARGE_IN_RESUME, CLOSINGS, OPENINGS, pick_from_pool
 from turn_filter import extract_name_correction
 
@@ -876,7 +876,7 @@ class CallState:
         return self.pick_phrase("ack", ACKS)
 
     def pick_opening(self, branch_name: str | None = None) -> str:
-        name = branch_name or self.branch_name
+        name = branch_name or GROUP_TRADING_NAME
         used = self.used_phrases.setdefault("opening", [])
         template = pick_from_pool(used, OPENINGS, rng=self.phrase_rng)
         line = template.format(branch=name)
@@ -976,9 +976,11 @@ class CallState:
             else "none"
         )
         return (
-            "CALL STATE (enforced in code — do not contradict, do not ask which branch):\n"
+            "CALL STATE (enforced in code — do not contradict):\n"
             f"{self.known_facts_block()}\n"
-            f"- branch: {self.branch_name} (id {self.branch}). They rang this number.\n"
+            f"- answering as: {GROUP_TRADING_NAME}\n"
+            f"- clinic: {self.branch_name} (id {self.branch}). They rang this clinic's "
+            "number, so start here; move them to another clinic if that suits them better.\n"
             f"- caller_name: {self.caller_name or 'unknown'}\n"
             f"- caller_mobile: {self.caller_mobile or 'unknown'}\n"
             f"- is_existing_patient: {self.is_existing_patient}\n"

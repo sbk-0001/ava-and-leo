@@ -23,7 +23,9 @@ def test_openings_and_closings_rotate() -> None:
     state = CallState(branch="dapto")
     openings = [state.pick_opening() for _ in OPENINGS]
     assert len(set(openings)) == len(OPENINGS)
-    assert any("Dapto Dentists" in line for line in openings)
+    # The opening names the practice, not the clinic whose number rang.
+    assert all("Illawarra Dentists" in line for line in openings)
+    assert not any("Dapto Dentists" in line for line in openings)
     assert any("how ya going" in line for line in openings)
     closings = [state.pick_closing() for _ in CLOSINGS]
     assert len(set(closings)) == len(CLOSINGS)

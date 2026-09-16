@@ -21,9 +21,11 @@ def test_did_branch_is_on_state_before_speech() -> None:
     assert state.branch == "dapto"
     assert state.branch_name == "Dapto Dentists"
     block = state.prompt_block().lower()
+    # She answers for the practice, but still knows which clinic's number rang.
+    assert "answering as: illawarra dentists" in block
     assert "dapto dentists" in block
-    assert "they rang this number" in block
-    assert "do not ask which branch" in block
+    assert "rang this clinic's number" in block
+    assert "do not ask which branch" not in block
     assert "which branch do you want" not in block
 
 

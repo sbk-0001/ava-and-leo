@@ -457,7 +457,8 @@ def load_session_instructions(branch_name: str) -> str:
 def ava_instructions(branch_id: str | None, state_block: str | None = None) -> str:
     branch = get_branch(branch_id)
     parts = [
-        load_session_instructions(branch.trading_name),
+        # She answers for the practice, not the site the DID maps to.
+        load_session_instructions(GROUP_TRADING_NAME),
         format_clinic_facts(branch.id),
     ]
     if state_block:

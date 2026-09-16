@@ -117,8 +117,12 @@ def test_voice_instructions_are_the_verbatim_file() -> None:
 
 def test_ava_instructions_answer_as_mapped_branch() -> None:
     text = ava_instructions("shellharbour")
-    assert "Morning, Shellharbour Dentists, Ava speaking!" in text
-    assert "you never ask which clinic they" in text.lower()
+    # Every number answers as the practice; the clinic is chosen with the caller.
+    assert "Morning, Illawarra Dentists, Ava speaking!" in text
+    assert "front desk at Illawarra Dentists" in text
+    assert "Morning, Shellharbour Dentists" not in text
+    assert "you never ask which clinic" not in text.lower()
+    assert "put each caller at the clinic that suits them" in text.lower()
     assert "Captain Cook Drive" in text
     assert "35 Baan Baan Street" in text
     assert "379 Princes Highway" in text

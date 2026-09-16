@@ -105,3 +105,42 @@ def test_date_context_dataclass_roundtrip() -> None:
     ctx = DateContext(today=date(2026, 9, 15))
     assert ctx.tomorrow.isoformat() == "2026-09-16"
     assert "Wednesday" in ctx.tomorrow_spoken
+
+
+def test_bare_weekday_resolves_to_that_day_not_the_whole_week() -> None:
+    """Regression for job AJ_AsnqaRBsShhx.
+
+    The caller said "Friday" and resolve_date_phrase returned Wed 16 -> Tue 22
+    with resolved=True, so Ava searched the whole week and grounded every date
+    in it. Only "next Friday" was ever handled; a bare weekday fell through to
+    the default range.
+    """
+    wednesday = datetime(2026, 9, 16, 16, 47, tzinfo=SYDNEY)
+    for phrase in ("Friday", "on Friday", "this Friday"):
+        result = resolve_date_phrase(phrase, now=wednesday)
+        assert result["resolved"] is True, phrase
+        assert result["start"] == "2026-09-18", phrase
+        assert result["end"] == "2026-09-18", phrase
+        assert "Friday" in (result["spoken"] or ""), phrase
+
+
+def test_bare_weekday_today_means_today() -> None:
+    friday = datetime(2026, 9, 18, 9, 0, tzinfo=SYDNEY)
+    result = resolve_date_phrase("Friday", now=friday)
+    assert result["start"] == "2026-09-18"
+    assert result["end"] == "2026-09-18"
+
+
+def test_bare_weekday_already_past_this_week_rolls_forward() -> None:
+    """Said on Thursday, "Monday" means the coming Monday, not one gone by."""
+    thursday = datetime(2026, 9, 17, 10, 0, tzinfo=SYDNEY)
+    result = resolve_date_phrase("Monday", now=thursday)
+    assert result["start"] == "2026-09-21"
+
+
+def test_next_weekday_still_asks_which_one() -> None:
+    """Do not regress the existing this-week / next-week disambiguation."""
+    wednesday = datetime(2026, 9, 16, 16, 47, tzinfo=SYDNEY)
+    result = resolve_date_phrase("next Friday", now=wednesday)
+    assert result["ambiguous"] is True
+    assert result["resolved"] is False

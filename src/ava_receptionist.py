@@ -77,6 +77,18 @@ AVA_TRANSCRIPTION_LANGUAGE = "en"
 AVA_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
 AVA_TEMPERATURE = 0.95
 
+ENGLISH_ONLY_SCRIPT = (
+    "Sorry love, I've only got English here. "
+    "If you can manage a bit of English I'll do my best, "
+    "otherwise give me a name and number and I'll have someone ring you back."
+)
+ENGLISH_ONLY_CALLBACK_SCRIPT = (
+    "I really am only English here, sorry. "
+    "Let me take a name and a mobile and we'll ring you back with someone who can help."
+)
+# After this many notices, stop repeating and go for the callback instead.
+ENGLISH_ONLY_NOTICE_LIMIT = 2
+
 EMERGENCY_000_SCRIPT = (
     "This sounds like it needs emergency care. Please hang up and call triple zero, "
     "or get straight to Shellharbour or Wollongong Hospital emergency. "
@@ -184,6 +196,7 @@ class AvaReceptionist(Agent):
         self._desk_tasks: set[asyncio.Task[Any]] = set()
         self._speech_tasks: set[asyncio.Task[Any]] = set()
         self._active_ladder: FillerLadder | None = None
+        self._english_only_notices = 0
         self._scripted_speech = False
         self._speech_session: Any | None = None
         self.filler_player = filler_player or FillerPlayer(
@@ -621,6 +634,31 @@ class AvaReceptionist(Agent):
                 raise StopResponse()
             return
         self.state.turn_count += 1
+        if verdict.needs_english_notice:
+            # She is English-only. Say so out loud instead of leaving dead air,
+            # and do not let the model improvise a reply in their language.
+            self._english_only_notices += 1
+            script = (
+                ENGLISH_ONLY_SCRIPT
+                if self._english_only_notices < ENGLISH_ONLY_NOTICE_LIMIT
+                else ENGLISH_ONLY_CALLBACK_SCRIPT
+            )
+            logger.info(
+                "non-english caller; speaking english-only notice #%s",
+                self._english_only_notices,
+            )
+            try:
+                await speak_scripted(
+                    self._voice_session(),
+                    script,
+                    allow_interruptions=True,
+                    kind="script",
+                )
+            except Exception:
+                logger.exception("english-only notice failed")
+            if StopResponse is not None:
+                raise StopResponse()
+            return
         if verdict.name_correction:
             self.state.correct_caller_name(verdict.name_correction)
             self._persist_caller_name()

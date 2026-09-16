@@ -12,6 +12,7 @@ from ava_receptionist import (
     AVA_DEFAULT_VOICE,
     AVA_SPEECH_SPEED,
     AVA_TEMPERATURE,
+    AVA_TRANSCRIPTION_LANGUAGE,
     AVA_VAD_SILENCE_MS,
     AvaReceptionist,
     ava_realtime_model,
@@ -142,6 +143,32 @@ def test_realtime_model_server_vad_barge_in() -> None:
     assert AVA_SPEECH_SPEED == 0.9
     assert 0.9 <= AVA_TEMPERATURE <= 1.0
     assert "create_response" in source
+
+
+def test_realtime_transcription_is_pinned_to_english() -> None:
+    """Ava is an English-only receptionist, so ASR must not guess the language.
+
+    On jobs AJ_zfzKY76q5L5A and AJ_BFVvzmBdUchN the caller spoke English and the
+    transcript came back in Cyrillic and then Chinese script, which the turn
+    filter dropped as non_task_language, so those turns reached Ava as silence.
+    Pinning the transcription language stops English audio being transcribed as
+    another script.
+    """
+    source = inspect.getsource(ava_realtime_model)
+    assert "input_audio_transcription" in source
+    assert "AVA_TRANSCRIPTION_LANGUAGE" in source
+    assert AVA_TRANSCRIPTION_LANGUAGE == "en"
+
+
+def test_ava_answers_in_english_whatever_the_caller_speaks() -> None:
+    """She may be spoken to in any language; she always replies in English."""
+    from persona import VOICE_INSTRUCTIONS
+
+    lowered = VOICE_INSTRUCTIONS.lower()
+    assert "english" in lowered
+    # An explicit never-switch rule, not just the word "English" in passing.
+    assert "another language" in lowered or "other language" in lowered
+    assert "australian english" in lowered
 
 
 def test_transfer_destination_prefers_branch_env() -> None:

@@ -269,3 +269,66 @@ def test_a_bare_yes_or_no_is_an_answer_when_nothing_is_running(text: str) -> Non
     assert classify_user_turn(text, tool_in_flight=False).ignore is False
     assert classify_user_turn(text, tool_in_flight=True).ignore is True
     assert classify_user_turn("mm", tool_in_flight=False).ignore is True
+
+
+# --- every phone call is kept, even when the desk is offline ----------------------
+
+
+async def test_worker_writes_transcript_lines_straight_to_the_shared_store(
+    monkeypatch,
+) -> None:
+    """The last phone call left no transcript: lines only reached the store
+    through the desk on the Mac, and the Mac's desk was down."""
+    import desk_events
+    from state_store import MemoryStateStore
+
+    store = MemoryStateStore()
+    monkeypatch.setattr(desk_events, "state_store_from_env", lambda: store)
+    posted: list[dict] = []
+
+    async def fake_http(packet):
+        posted.append(packet)
+
+    monkeypatch.setattr(desk_events, "post_desk_event_http", fake_http)
+    room = SimpleNamespace(name="call-+61474470332", local_participant=None)
+    await desk_events.emit_desk_event(
+        {"type": "transcript", "role": "user", "text": "Hi, I need a check-up"},
+        room=room,
+    )
+    rows = await store.desk_events_after(0)
+    assert [p["text"] for _, p in rows] == ["Hi, I need a check-up"]
+    assert rows[0][1]["room"] == "call-+61474470332"
+    assert rows[0][1]["channel"] == "sip"
+    assert posted == [], "the desk reads the store; posting too would duplicate"
+
+
+async def test_without_a_store_the_desk_still_gets_the_post(monkeypatch) -> None:
+    import desk_events
+
+    monkeypatch.setattr(desk_events, "state_store_from_env", lambda: None)
+    posted: list[dict] = []
+
+    async def fake_http(packet):
+        posted.append(packet)
+
+    monkeypatch.setattr(desk_events, "post_desk_event_http", fake_http)
+    await desk_events.emit_desk_event({"type": "transcript", "text": "hello"})
+    assert len(posted) == 1
+
+
+async def test_store_failure_falls_back_to_the_desk(monkeypatch) -> None:
+    import desk_events
+
+    class Broken:
+        async def append_desk_event(self, packet):
+            raise OSError("db down")
+
+    monkeypatch.setattr(desk_events, "state_store_from_env", lambda: Broken())
+    posted: list[dict] = []
+
+    async def fake_http(packet):
+        posted.append(packet)
+
+    monkeypatch.setattr(desk_events, "post_desk_event_http", fake_http)
+    await desk_events.emit_desk_event({"type": "transcript", "text": "hello"})
+    assert len(posted) == 1

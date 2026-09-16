@@ -24,6 +24,8 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+from state_store import state_store_from_env
+
 try:
     from livekit.agents.llm import FunctionCall, FunctionCallOutput
 except ImportError:  # the cloud portal runs without the agents SDK
@@ -310,9 +312,21 @@ async def publish_desk_packet(room: Any, packet: dict[str, Any]) -> None:
 
 
 async def emit_desk_event(packet: dict[str, Any], *, room: Any = None) -> None:
-    """Send one packet on LiveKit data *and* the local HTTP bus."""
+    """Send one packet on LiveKit data, and keep it.
+
+    With a shared store the line is written there directly, so a phone call is
+    recorded even when the desk (or its tunnel) is down; the desk reads the
+    same table. Without one, or if the write fails, it is posted to the desk.
+    """
     stamped = stamp_packet(packet, room=room)
     await publish_desk_packet(room, stamped)
+    store = state_store_from_env()
+    if store is not None:
+        try:
+            await store.append_desk_event(stamped)
+            return
+        except Exception:
+            logger.exception("desk event store write failed; posting to the desk")
     await post_desk_event_http(stamped)
 
 

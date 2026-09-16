@@ -221,3 +221,33 @@ def test_desk_stream_accepts_query_token() -> None:
     assert http.get(f"/api/branches?token={digest}").status_code == 200
     assert http.get("/api/branches?token=secret").status_code == 200
     assert http.get("/api/desk/stream?token=wrong").status_code == 401
+
+
+def test_call_button_cannot_open_a_second_room() -> None:
+    """One click, one room. A second click must not dispatch a second agent.
+
+    Every POST /api/token mints a brand new room carrying its own agent
+    dispatch, so a click landing while the first call is still connecting used
+    to put two agents on the line talking over each other. There is no JS test
+    runner here, so assert the invariants on the served script.
+    """
+    js = (STATIC / "app.js").read_text()
+
+    # A click is refused while a call is connecting or already up.
+    assert "if (state.connecting || state.room) return;" in js
+
+    # The slot is claimed before connect(), so a click landing mid-connect is
+    # refused rather than racing an unset state.room.
+    assert js.index("state.room = room;") < js.index("await room.connect(")
+
+    # Late events from a room we already replaced must not tear down the live one.
+    assert "if (state.room !== room) return;" in js
+
+    # A failed connect tears its own room down, so no orphaned agent keeps
+    # talking into a room nobody is listening to.
+    assert "await room.disconnect();" in js
+
+    # Remote audio elements are replaced, never stacked.
+    assert (
+        '$("remote-audio").innerHTML = "";\n      $("remote-audio").appendChild' in js
+    )

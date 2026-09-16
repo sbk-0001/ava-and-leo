@@ -21,6 +21,7 @@ from phrase_pools import STAGE_2, STAGE_3
 from realtime_hygiene import (
     CONTEXT_MAX_ITEMS,
     RATE_LIMIT_COVER_INSTRUCTIONS,
+    RATE_LIMIT_MAX_DELAY_S,
     RATE_LIMIT_RETRY_INSTRUCTIONS,
     RateLimitRecovery,
     call_state_anchor_text,
@@ -284,3 +285,33 @@ def test_ava_trims_on_user_turn() -> None:
     src = inspect.getsource(AvaReceptionist.on_user_turn_completed)
     assert "maybe_trim_realtime_context" in src
     assert "update_instructions" in src
+
+
+def test_milliseconds_are_not_read_as_seconds() -> None:
+    """Regression for job AJ_AsnqaRBsShhx.
+
+    OpenAI answered "Please try again in 120ms" and the parser returned 120.0,
+    so recovery slept for two minutes on a live call. The caller asked "why are
+    you not talking?" and hung up. The unit group was captured and then ignored.
+    """
+    assert parse_retry_after_s("Please try again in 120ms") == pytest.approx(0.12)
+    assert parse_retry_after_s("Please try again in 859ms") == pytest.approx(0.859)
+
+
+def test_seconds_still_parse_as_seconds() -> None:
+    for text, expected in (
+        ("Please try again in 11.11s", 11.11),
+        ("Please try again in 1.144s", 1.144),
+        ("Please try again in 14.932s", 14.932),
+        ("Please try again in 6 seconds", 6.0),
+        ("Please try again in 4.332s", 4.332),
+    ):
+        assert parse_retry_after_s(text) == pytest.approx(expected), text
+
+
+def test_backoff_never_strands_the_caller_in_silence() -> None:
+    """A phone caller cannot sit through a minute of nothing, whatever the API says."""
+    assert rate_limit_backoff_s(1, retry_after_s=120.0) <= RATE_LIMIT_MAX_DELAY_S
+    assert rate_limit_backoff_s(1, retry_after_s=14.932) <= RATE_LIMIT_MAX_DELAY_S
+    # A short, sane hint is still honoured rather than clamped up or down oddly.
+    assert rate_limit_backoff_s(1, retry_after_s=0.12) == pytest.approx(1.0)

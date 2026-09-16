@@ -140,14 +140,39 @@ def is_rate_limit_error(error: object) -> bool:
     return any(needle in text for needle in _RATE_LIMIT_NEEDLES)
 
 
+# Longest we will ever sit on a live call waiting to retry. A caller cannot sit
+# through more than a few seconds of nothing, whatever the API suggests, and a
+# unit we fail to recognise must never again strand them.
+RATE_LIMIT_MAX_DELAY_S = 8.0
+
+# OpenAI answers in milliseconds as often as seconds ("try again in 120ms").
+# The unit is captured AND USED: reading 120ms as 120s put a caller through two
+# minutes of silence on job AJ_AsnqaRBsShhx.
 _RETRY_AFTER_RE = re.compile(
-    r"try again in\s+(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds)?",
+    r"try again in\s+(\d+(?:\.\d+)?)\s*"
+    r"(ms|millis|milliseconds?|s|secs?|seconds?|m|mins?|minutes?)?",
     re.IGNORECASE,
 )
+_RETRY_AFTER_UNITS: dict[str, float] = {
+    "ms": 0.001,
+    "millis": 0.001,
+    "millisecond": 0.001,
+    "milliseconds": 0.001,
+    "s": 1.0,
+    "sec": 1.0,
+    "secs": 1.0,
+    "second": 1.0,
+    "seconds": 1.0,
+    "m": 60.0,
+    "min": 60.0,
+    "mins": 60.0,
+    "minute": 60.0,
+    "minutes": 60.0,
+}
 
 
 def parse_retry_after_s(error: object) -> float | None:
-    """Read OpenAI's 'Please try again in 6.42s' hint from a TPM error."""
+    """Read OpenAI's 'try again in 6.42s' / 'in 120ms' hint from a TPM error."""
     if error is None:
         return None
     chunks = [str(error)]
@@ -158,17 +183,22 @@ def parse_retry_after_s(error: object) -> float | None:
     match = _RETRY_AFTER_RE.search(" ".join(chunks))
     if not match:
         return None
-    return float(match.group(1))
+    unit = (match.group(2) or "s").lower()
+    return float(match.group(1)) * _RETRY_AFTER_UNITS.get(unit, 1.0)
 
 
 def rate_limit_backoff_s(attempt: int, retry_after_s: float | None = None) -> float:
-    """1s, 2s, 4s, … capped at 8s, never shorter than the API's retry-after."""
+    """1s, 2s, 4s, … capped at 8s, never shorter than the API's retry-after.
+
+    The cap is a hard ceiling on caller silence. Retrying a little early costs a
+    further 429, which recovery handles; waiting out a long hint costs the call.
+    """
     if attempt < 1:
         attempt = 1
     exponential = float(min(8.0, 1.0 * (2 ** (attempt - 1))))
     if retry_after_s is None:
         return exponential
-    return float(max(exponential, retry_after_s))
+    return float(min(RATE_LIMIT_MAX_DELAY_S, max(exponential, retry_after_s)))
 
 
 class RateLimitRecovery:

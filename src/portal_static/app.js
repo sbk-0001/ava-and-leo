@@ -27,6 +27,84 @@ const FIELD_LABELS = {
 
 const $ = (id) => document.getElementById(id);
 
+// ---- ByteVoice presentation -------------------------------------------------
+// Waveform: the design system's symmetric envelope, peaking at the centre, so
+// every wave on the page echoes the ByteVoice mark.
+function buildWave(el) {
+  const bars = el.classList.contains("wave-xs") ? 9 : el.classList.contains("wave-sm") ? 11 : 16;
+  const height = el.getBoundingClientRect().height || 16;
+  el.innerHTML = "";
+  for (let i = 0; i < bars; i += 1) {
+    const t = Math.abs(i - (bars - 1) / 2) / ((bars - 1) / 2);
+    const bar = document.createElement("i");
+    bar.style.height = `${Math.max(3, Math.round(height * (0.25 + 0.75 * (1 - t) ** 1.6)))}px`;
+    bar.style.animationDelay = `${(i % 5) * 0.13}s`;
+    el.appendChild(bar);
+  }
+}
+
+function setWaveState(speaking) {
+  document.querySelectorAll(".live-state .wave").forEach((el) => {
+    el.classList.toggle("is-idle", !speaking);
+    el.classList.toggle("is-speaking", speaking);
+  });
+}
+
+function heroVideo() {
+  const hero = document.querySelector(".hero");
+  if (!hero || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const video = document.createElement("video");
+  video.className = "hero-video";
+  video.muted = true;
+  video.loop = true;
+  video.autoplay = true;
+  video.playsInline = true;
+  video.setAttribute("aria-hidden", "true");
+  video.preload = "auto";
+  // VP9 is a quarter the size; H.264 covers Safari. The source Higgsfield
+  // returned was HEVC, which Chrome and Firefox will not play in <video>.
+  for (const [src, type] of [
+    ["/static/brand/hero-loop.webm", "video/webm; codecs=vp9"],
+    ["/static/brand/hero-loop.mp4", "video/mp4"],
+  ]) {
+    const source = document.createElement("source");
+    source.src = src;
+    source.type = type;
+    video.appendChild(source);
+  }
+  video.addEventListener("canplay", () => {
+    video.classList.add("is-ready");
+    video.play().catch(() => {});
+  }, { once: true });
+  // If no source plays, keep the still image rather than a broken frame.
+  video.lastElementChild.addEventListener("error", () => video.remove(), { once: true });
+  hero.prepend(video);
+}
+
+function initBrandUI() {
+  document.querySelectorAll(".wave").forEach(buildWave);
+  const kicker = $("today-kicker");
+  if (kicker) {
+    kicker.textContent = new Date().toLocaleDateString("en-AU", {
+      weekday: "long", day: "numeric", month: "long", timeZone: "Australia/Sydney",
+    });
+  }
+  document.querySelectorAll(".side-link").forEach((link) => {
+    link.addEventListener("click", () => {
+      document.querySelectorAll(".side-link").forEach((l) => l.classList.remove("is-active"));
+      link.classList.add("is-active");
+    });
+  });
+  heroVideo();
+}
+
+function updateStats(slots) {
+  const open = slots.filter((slot) => !slot.taken).length;
+  const booked = slots.length - open;
+  if ($("stat-open")) $("stat-open").textContent = String(open);
+  if ($("stat-booked")) $("stat-booked").textContent = String(booked);
+}
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
@@ -86,6 +164,7 @@ function currentBranch() {
 function renderFacts() {
   const branch = currentBranch();
   if (!branch) return;
+  if ($("stat-clinic")) $("stat-clinic").textContent = branch.suburb;
   $("fact-suburb").textContent = branch.suburb;
   $("fact-name").textContent = branch.trading_name;
   $("fact-address").textContent = branch.address;
@@ -155,7 +234,7 @@ function renderDiary() {
       actions.append(move, cancel);
     }
     list.appendChild(row);
-  }
+  }  updateStats(slots);
 }
 
 async function loadDiary() {
@@ -473,6 +552,7 @@ async function callAva() {
     await room.startAudio();
     await room.localParticipant.setMicrophoneEnabled(true);
     $("hang-up").classList.remove("hidden");
+    setWaveState(true);
     setCallStatus(`Connected to Ava at ${currentBranch().trading_name}. Speak normally.`);
   } catch (error) {
     // Drop a half-connected room, otherwise its dispatched agent keeps talking
@@ -496,6 +576,7 @@ async function callAva() {
 }
 
 async function hangUp(disconnect = true) {
+  setWaveState(false);
   // Clear the slot first so the Disconnected handler sees a stale room and does
   // not re-enter this function.
   const room = state.room;
@@ -534,6 +615,7 @@ $("login-form").addEventListener("submit", async (event) => {
 });
 
 async function boot() {
+  initBrandUI();
   const config = await api("/api/config");
   $("auth-note").textContent = config.auth_note || "";
   if (config.auth_required) {

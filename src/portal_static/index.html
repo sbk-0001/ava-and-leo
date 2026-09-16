@@ -1,135 +1,211 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en-AU">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Illawarra Dentists — Ava desk</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap"
-      rel="stylesheet"
-    />
+    <meta name="theme-color" content="#0A1129" />
+    <title>Illawarra Dentists — Ava desk · ByteVoice</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/static/apple-touch-icon.png" />
+    <link rel="preload" href="/static/brand/outfit-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.js"></script>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
+    <!-- ================= Login ================= -->
     <div id="login-gate" class="gate hidden">
-      <form id="login-form" class="card gate-card">
-        <p class="eyebrow">byte voice</p>
+      <form id="login-form" class="gate-card">
+        <img class="gate-mark" src="/static/brand/bytevoice-mark.svg" alt="" />
+        <p class="kicker">ByteVoice · Ava desk</p>
         <h1>Illawarra Dentists</h1>
-        <p class="muted">Barrack Heights · Dapto · Woonona</p>
-        <p class="muted">Enter the shared portal password to continue.</p>
-        <label>
-          Password
+        <p class="gate-sites">Barrack Heights · Dapto · Woonona</p>
+        <label class="field">
+          <span>Desk password</span>
           <input type="password" id="login-password" autocomplete="current-password" required />
         </label>
         <p id="login-error" class="error hidden"></p>
-        <button type="submit">Open desk</button>
+        <button type="submit" class="btn btn-gold btn-lg">Open the desk</button>
+        <footer class="gate-foot">
+          <img src="/static/brand/strategybyte-white.png" alt="StrategyByte" />
+          <span>ByteVoice is a StrategyByte company</span>
+        </footer>
       </form>
     </div>
 
-    <header class="topbar">
-      <div class="brand">
-        <p class="eyebrow">byte voice · Ava desk</p>
-        <h1>Illawarra Dentists</h1>
-        <p class="brand-sites">Barrack Heights · Dapto · Woonona</p>
-      </div>
-      <div class="topbar-actions">
-        <p id="auth-note" class="muted auth-note"></p>
-        <button id="call-ava" type="button" class="call-btn">Call Ava</button>
-        <button id="hang-up" type="button" class="ghost hidden">Hang up</button>
-      </div>
-    </header>
-
-    <div id="call-status" class="call-status hidden" role="status"></div>
-    <div id="remote-audio"></div>
-
-    <section id="live-call" class="card live-call" aria-live="polite">
-      <div class="live-call-head">
-        <div>
-          <p class="eyebrow">Live call</p>
-          <h2>Transcript and booking activity</h2>
+    <div class="shell">
+      <!-- ================= Sidebar ================= -->
+      <aside class="sidebar">
+        <div class="side-brand">
+          <img src="/static/brand/bytevoice-mark.svg" alt="" class="side-mark" />
+          <span class="side-word">ByteVoice</span>
         </div>
-        <p id="live-call-hint" class="muted live-call-hint">
-          Web Call Ava and inbound phone appear here.
-        </p>
-        <p id="grounding-count" class="muted live-call-hint">
-          Grounding violations: 0
-        </p>
-      </div>
-      <div class="live-call-grid">
-        <div>
-          <h3>Transcript</h3>
-          <div id="live-transcript" class="live-scroll"></div>
-        </div>
-        <div>
-          <h3>Booking activity</h3>
-          <div id="live-activity" class="live-scroll"></div>
-        </div>
-      </div>
-    </section>
 
-    <nav id="branch-tabs" class="tabs" aria-label="Branches"></nav>
+        <nav class="side-nav" aria-label="Desk">
+          <a class="side-link is-active" href="#top"><span class="ico ico-grid"></span>Desk</a>
+          <a class="side-link" href="#live-call"><span class="ico ico-phone"></span>Live call</a>
+          <a class="side-link" href="#diary"><span class="ico ico-cal"></span>Diary</a>
+          <a class="side-link" href="#facts"><span class="ico ico-pin"></span>Clinics</a>
+        </nav>
 
-    <main class="layout">
-      <section class="card facts" id="facts">
-        <p class="eyebrow" id="fact-suburb"></p>
-        <h2 id="fact-name"></h2>
-        <dl>
-          <div><dt>Address</dt><dd id="fact-address"></dd></div>
-          <div><dt>Phone</dt><dd id="fact-phone"></dd></div>
-          <div><dt>Hours</dt><dd id="fact-hours"></dd></div>
-          <div><dt>Parking</dt><dd id="fact-parking"></dd></div>
-          <div><dt>Languages</dt><dd id="fact-languages"></dd></div>
-          <div><dt>Cancellation</dt><dd id="fact-cancellation"></dd></div>
-        </dl>
-        <h3>Dentists</h3>
-        <ul id="fact-dentists" class="dentist-list"></ul>
-      </section>
-
-      <section class="card diary">
-        <div class="diary-head">
-          <div>
-            <p class="eyebrow">Mock diary</p>
-            <h2>Appointments</h2>
+        <div class="side-bottom">
+          <div class="live-card">
+            <div class="live-card-row">
+              <span class="pulse-dot"></span>
+              <span class="live-card-title">Ava is answering</span>
+            </div>
+            <p class="live-card-sub">Phone and web · all three clinics</p>
+            <div class="wave wave-sm is-speaking" aria-hidden="true"></div>
           </div>
-          <label class="date-label">
-            Date
-            <input type="date" id="diary-date" />
-          </label>
-        </div>
-        <p id="diary-empty" class="muted hidden">No slots on this date.</p>
-        <div id="slot-list" class="slot-list"></div>
-      </section>
-    </main>
 
+          <div class="practice">
+            <span class="practice-avatar">ID</span>
+            <span class="practice-text">
+              <span class="practice-name">Illawarra Dentists</span>
+              <span class="practice-role">Ava desk · 3 clinics</span>
+            </span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- ================= Main ================= -->
+      <main class="main" id="top">
+        <section class="hero">
+          <div class="hero-copy">
+            <p class="kicker kicker-on-navy" id="today-kicker">Today</p>
+            <h1 class="hero-title">Illawarra Dentists</h1>
+            <p class="hero-sites">
+              <span>Barrack Heights</span><i></i><span>Dapto</span><i></i><span>Woonona</span>
+            </p>
+          </div>
+          <div class="hero-actions">
+            <p id="auth-note" class="auth-note"></p>
+            <button id="call-ava" type="button" class="btn btn-gold btn-lg call-btn">
+              <img src="/static/brand/bytevoice-mark.svg" alt="" class="call-mark" />
+              <span>Call Ava</span>
+            </button>
+            <button id="hang-up" type="button" class="btn btn-danger btn-lg hidden">
+              <span class="ico ico-hang"></span><span>Hang up</span>
+            </button>
+          </div>
+        </section>
+
+        <div id="call-status" class="call-status hidden" role="status"></div>
+        <div id="remote-audio" class="sr-only"></div>
+
+        <!-- Stats -->
+        <section class="stats" aria-label="Today at a glance">
+          <article class="stat">
+            <p class="stat-label">Open appointments</p>
+            <p class="stat-value tabular" id="stat-open">—</p>
+            <p class="stat-sub">on the selected day</p>
+          </article>
+          <article class="stat">
+            <p class="stat-label">Booked</p>
+            <p class="stat-value stat-gold tabular" id="stat-booked">—</p>
+            <p class="stat-sub">at this clinic</p>
+          </article>
+          <article class="stat">
+            <p class="stat-label">Clinic</p>
+            <p class="stat-value stat-text" id="stat-clinic">—</p>
+            <p class="stat-sub">selected below</p>
+          </article>
+          <article class="stat">
+            <p class="stat-label">Grounding violations</p>
+            <p class="stat-value tabular"><span id="grounding-count">0</span></p>
+            <p class="stat-sub">invented facts blocked</p>
+          </article>
+        </section>
+
+        <div class="grid">
+          <!-- Live call -->
+          <section id="live-call" class="card card-navy live" aria-live="polite">
+            <header class="live-head">
+              <span class="kicker kicker-on-navy">Live call</span>
+              <span class="live-state"><span class="wave wave-xs is-idle" aria-hidden="true"></span></span>
+            </header>
+            <h2 class="live-title">Transcript &amp; bookings</h2>
+            <p id="live-call-hint" class="live-hint">
+              Web calls and inbound phone calls appear here as they happen.
+            </p>
+            <div class="live-cols">
+              <div>
+                <p class="col-label">Transcript</p>
+                <div id="live-transcript" class="feed"></div>
+              </div>
+              <div>
+                <p class="col-label">Booking activity</p>
+                <div id="live-activity" class="feed"></div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Clinic facts -->
+          <section id="facts" class="card facts">
+            <p class="kicker" id="fact-suburb"></p>
+            <h2 class="facts-title" id="fact-name"></h2>
+            <dl class="facts-list">
+              <div><dt>Address</dt><dd id="fact-address"></dd></div>
+              <div><dt>Phone</dt><dd id="fact-phone" class="tabular"></dd></div>
+              <div><dt>Hours</dt><dd id="fact-hours"></dd></div>
+              <div><dt>Parking</dt><dd id="fact-parking"></dd></div>
+              <div><dt>Languages</dt><dd id="fact-languages"></dd></div>
+              <div><dt>Cancellation</dt><dd id="fact-cancellation"></dd></div>
+            </dl>
+            <p class="col-label">Dentists</p>
+            <ul id="fact-dentists" class="dentists"></ul>
+          </section>
+        </div>
+
+        <!-- Diary -->
+        <section id="diary" class="card diary">
+          <header class="diary-head">
+            <div>
+              <p class="kicker">Appointments</p>
+              <h2 class="diary-title">Clinic diary</h2>
+            </div>
+            <label class="date-field">
+              <span>Date</span>
+              <input type="date" id="diary-date" />
+            </label>
+          </header>
+          <nav id="branch-tabs" class="tabs" aria-label="Clinic"></nav>
+          <p id="diary-empty" class="empty hidden">No appointments on this date.</p>
+          <div id="slot-list" class="slots"></div>
+        </section>
+
+        <footer class="foot">
+          <span class="foot-by">
+            <img src="/static/brand/bytevoice-mark.svg" alt="" />
+            ByteVoice
+          </span>
+          <span class="foot-parent">
+            <span>A product of</span>
+            <img src="/static/brand/strategybyte-dark.png" alt="StrategyByte" />
+          </span>
+        </footer>
+      </main>
+    </div>
+
+    <!-- ================= Booking dialog ================= -->
     <dialog id="book-dialog" class="dialog">
-      <form id="book-form" method="dialog" class="card">
+      <form id="book-form" method="dialog">
+        <p class="kicker">Diary</p>
         <h2 id="book-title">Book appointment</h2>
-        <p id="book-slot-label" class="muted"></p>
+        <p id="book-slot-label" class="dialog-sub"></p>
         <input type="hidden" id="book-slot-id" />
         <input type="hidden" id="book-booking-id" />
-        <label>
-          Patient name
-          <input type="text" id="book-name" required autocomplete="name" />
-        </label>
-        <label>
-          Mobile
-          <input type="tel" id="book-phone" required autocomplete="tel" />
-        </label>
-        <label>
-          Reason
-          <input type="text" id="book-reason" value="Check-up" />
-        </label>
+        <label class="field"><span>Patient name</span><input id="book-name" required /></label>
+        <label class="field"><span>Mobile</span><input id="book-phone" inputmode="tel" /></label>
+        <label class="field"><span>Reason</span><input id="book-reason" /></label>
         <p id="book-error" class="error hidden"></p>
         <div class="dialog-actions">
-          <button type="button" class="ghost" id="book-cancel">Close</button>
-          <button type="submit" id="book-submit">Confirm booking</button>
+          <button type="button" id="book-cancel" class="btn btn-secondary">Cancel</button>
+          <button type="submit" id="book-submit" class="btn btn-primary">Confirm</button>
         </div>
       </form>
     </dialog>
 
-    <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.js"></script>
     <script src="/static/app.js"></script>
   </body>
 </html>

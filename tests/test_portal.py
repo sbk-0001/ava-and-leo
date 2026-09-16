@@ -251,3 +251,31 @@ def test_call_button_cannot_open_a_second_room() -> None:
     assert (
         '$("remote-audio").innerHTML = "";\n      $("remote-audio").appendChild' in js
     )
+
+
+def test_microphone_is_acquired_before_a_token_is_minted() -> None:
+    """A blocked mic must not cost an agent dispatch.
+
+    Every POST /api/token mints a room carrying its own agent dispatch, so
+    asking for the microphone afterwards burned a Realtime session on a call
+    that could never carry the caller's voice - and surfaced to staff as a bare
+    "Permission denied".
+    """
+    js = (STATIC / "app.js").read_text()
+
+    assert "async function acquireMicrophone()" in js
+    assert "await acquireMicrophone();" in js
+
+    # Ordering is the whole point: mic first, token second.
+    assert js.index("await acquireMicrophone();") < js.index('api("/api/token"')
+
+
+def test_microphone_errors_are_actionable() -> None:
+    """Staff need to know what to do, not just that something was denied."""
+    js = (STATIC / "app.js").read_text()
+
+    assert "NotAllowedError" in js  # blocked -> how to unblock
+    assert "NotFoundError" in js  # no device
+    assert "NotReadableError" in js  # busy in another app
+    assert "isSecureContext" in js  # http:// page
+    assert "padlock" in js.lower()

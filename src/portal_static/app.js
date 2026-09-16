@@ -372,6 +372,38 @@ function setCallStatus(message, visible = true) {
   el.classList.toggle("hidden", !visible);
 }
 
+function micErrorMessage(error) {
+  const name = (error && error.name) || "";
+  if (!window.isSecureContext) {
+    return "Microphone needs a secure page. Open the desk over https:// (or on localhost).";
+  }
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return "Microphone blocked. Click the padlock in the address bar → Microphone → Allow, then reload and call again.";
+  }
+  if (name === "NotFoundError" || name === "OverconstrainedError") {
+    return "No microphone found. Plug one in or choose one in your browser's site settings, then try again.";
+  }
+  if (name === "NotReadableError" || name === "AbortError") {
+    return "Your microphone is busy in another app. Close Zoom / Teams / Meet and try again.";
+  }
+  return `Microphone unavailable${name ? ` (${name})` : ""}. Check this site's microphone permission.`;
+}
+
+// Hold the mic before minting a token. Every /api/token dispatches an agent, so
+// asking afterwards burned a Realtime session on a call that could never carry
+// the caller's voice — and surfaced as a bare "Permission denied".
+async function acquireMicrophone() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    throw new Error(micErrorMessage({ name: "NotSupportedError" }));
+  }
+  try {
+    const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+    probe.getTracks().forEach((track) => track.stop());
+  } catch (error) {
+    throw new Error(micErrorMessage(error));
+  }
+}
+
 async function callAva() {
   // One call at a time. Every /api/token mints a fresh room carrying its own
   // agent dispatch, so a second click while connecting or connected put two
@@ -383,6 +415,7 @@ async function callAva() {
   $("call-ava").classList.add("live");
   let room = null;
   try {
+    await acquireMicrophone();
     const token = await api("/api/token", {
       method: "POST",
       body: JSON.stringify({ branch_id: state.branchId }),

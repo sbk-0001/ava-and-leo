@@ -482,6 +482,37 @@ def ingest_date_resolution(
     return facts
 
 
+def ingest_clock_fact(
+    facts: SpeakableFacts,
+    result: Mapping[str, Any],
+    *,
+    today: date | None = None,
+) -> SpeakableFacts:
+    """Ground the wall clock returned by current_time_sydney.
+
+    Answering "what time is it?" means saying a time that is not a diary slot,
+    so without this the gate treats Ava's own answer as an invented time and
+    plays a filler instead. Only the clock itself is grounded here — offering an
+    appointment still requires a slot from check_availability.
+    """
+    facts.allow_calendar(today or datetime.now(SYDNEY).date())
+    if not result.get("ok"):
+        return facts
+    raw_iso = str(result.get("now_iso") or "")
+    if raw_iso:
+        try:
+            moment = datetime.fromisoformat(raw_iso)
+        except ValueError:
+            moment = None
+        if moment is not None:
+            facts.times.update(spoken_time_variants(moment.strftime("%H:%M")))
+    for key in ("clock", "spoken", "period"):
+        value = str(result.get(key) or "").strip()
+        if value:
+            facts.times.add(_norm(value))
+    return facts
+
+
 def _known(token: str, allowed: set[str]) -> bool:
     needle = _norm(token)
     if needle in allowed:

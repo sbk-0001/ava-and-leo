@@ -23,6 +23,7 @@ from grounding import (
     gate_utterance,
     ingest_availability,
     ingest_book_result,
+    ingest_clock_fact,
     ingest_date_resolution,
 )
 from persona import BRANCHES, DEFAULT_BRANCH_ID, get_branch
@@ -468,6 +469,10 @@ class CallState:
 
     def apply_date_resolution(self, result: Mapping[str, Any]) -> None:
         ingest_date_resolution(self.speakable, result, today=self.today)
+
+    def apply_clock_fact(self, result: Mapping[str, Any]) -> None:
+        """Let Ava speak the clock she just looked up."""
+        ingest_clock_fact(self.speakable, result, today=self.today)
 
     def gate_speech(self, text: str) -> GateResult:
         gated = gate_utterance(text, self.speakable)

@@ -9,7 +9,6 @@ Then open http://127.0.0.1:8787
 from __future__ import annotations
 
 import os
-import sys
 import threading
 
 from dotenv import load_dotenv
@@ -49,30 +48,6 @@ def _start_portal() -> str:
     return f"http://{host}:{port}"
 
 
-# LiveKit Agents subcommands that already start a worker. `cli.run_app()` needs
-# one of these; given none it prints the CLI help and exits, which also tears
-# down the daemon portal thread started above.
-WORKER_SUBCOMMANDS = frozenset({"dev", "start", "console", "connect", "download-files"})
-PASSTHROUGH_FLAGS = frozenset(
-    {"--help", "-h", "--install-completion", "--show-completion"}
-)
-
-
-def _ensure_worker_subcommand(argv: list[str]) -> list[str]:
-    """Default a bare invocation to `dev` so the documented usage works.
-
-    `uv run python src/run_local.py` is what the module docstring and the README
-    tell you to run, so it has to start the worker rather than print help.
-    Explicit subcommands and help/completion flags pass through untouched.
-    """
-    args = argv[1:]
-    if any(arg in WORKER_SUBCOMMANDS for arg in args):
-        return argv
-    if any(arg in PASSTHROUGH_FLAGS for arg in args):
-        return argv
-    return [*argv, "dev"]
-
-
 def main() -> None:
     url = _start_portal()
     os.environ.setdefault("PORTAL_URL", url)
@@ -96,7 +71,6 @@ def main() -> None:
 
     from agent import server
 
-    sys.argv = _ensure_worker_subcommand(sys.argv)
     cli.run_app(server)
 
 

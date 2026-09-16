@@ -762,6 +762,7 @@ class AvaReceptionist(Agent):
         del context
         self.state.refresh_dates()
         result = current_time_sydney_fn(now=self.state.now)
+        self.state.apply_clock_fact(result)
         self._log_tool("current_time_sydney", result, {})
         return result
 

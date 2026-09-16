@@ -17,6 +17,7 @@ from grounding import (
     grounded_realtime_transcription,
     ingest_availability,
     ingest_book_result,
+    ingest_clock_fact,
 )
 
 
@@ -248,3 +249,67 @@ async def test_realtime_transcription_yields_recovery_not_ungrounded() -> None:
     assert "Maryam" not in yielded
     assert rewrites == [RECOVERY_DEFAULT]
     assert committed[0] == "You're all set, "
+
+
+def _clock_fact(hour: int = 15, minute: int = 53) -> dict:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from date_context import current_time_sydney
+
+    return current_time_sydney(
+        now=datetime(2026, 9, 16, hour, minute, tzinfo=ZoneInfo("Australia/Sydney"))
+    )
+
+
+def test_clock_fact_lets_ava_answer_what_time_is_it() -> None:
+    """Regression for the 2026-09-16 call (job AJ_zfzKY76q5L5A).
+
+    `current_time_sydney` returned "3:53 pm" but the clock never reached
+    SpeakableFacts, so the gate treated Ava saying it as an ungrounded time and
+    played a filler instead. She was asked twice and never answered; the call
+    stalled and the caller hung up.
+    """
+    answer = "Right now it's 3:53 pm, so we're into the arvo."
+
+    facts = SpeakableFacts()
+    facts.allow_calendar(date(2026, 9, 16))
+    assert gate_utterance(answer, facts, log=False).suppressed is True
+
+    ingest_clock_fact(facts, _clock_fact(), today=date(2026, 9, 16))
+    gated = gate_utterance(answer, facts, log=False)
+    assert gated.suppressed is False
+    assert "3:53" in gated.spoken
+
+
+def test_clock_fact_does_not_ground_other_times() -> None:
+    """Knowing the clock must not license inventing a diary slot."""
+    facts = SpeakableFacts()
+    facts.allow_calendar(date(2026, 9, 16))
+    ingest_clock_fact(facts, _clock_fact(), today=date(2026, 9, 16))
+
+    gated = gate_utterance(
+        "I've got you in at 4:30 with Dr Pat Pandey.", facts, log=False
+    )
+    assert gated.suppressed is True
+
+
+def test_failed_clock_fact_grounds_nothing() -> None:
+    facts = SpeakableFacts()
+    facts.allow_calendar(date(2026, 9, 16))
+    ingest_clock_fact(facts, {"ok": False}, today=date(2026, 9, 16))
+    assert (
+        gate_utterance("Right now it's 3:53 pm.", facts, log=False).suppressed is True
+    )
+
+
+def test_call_state_applies_the_clock_fact() -> None:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    state = CallState(
+        branch="shellharbour",
+        now=datetime(2026, 9, 16, 15, 53, tzinfo=ZoneInfo("Australia/Sydney")),
+    )
+    state.apply_clock_fact(_clock_fact())
+    assert state.gate_speech("Right now it's 3:53 pm.").suppressed is False

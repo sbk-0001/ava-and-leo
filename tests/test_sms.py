@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from sms import (
+    BrevoSms,
     MemorySms,
     TelnyxSms,
     au_mobile_e164,
@@ -139,6 +140,63 @@ async def test_telnyx_failure_is_reported_not_raised(monkeypatch) -> None:
     result = await TelnyxSms(api_key="k", from_="x").send("+61474470332", "hi")
     assert result["ok"] is False
     assert "network down" in result["error"]
+
+
+def test_brevo_is_the_default_sms_provider_when_keyed() -> None:
+    """Strategybyte's prepaid SMS credits are on Brevo."""
+    sender = sms_sender_from_env({"SMS_PROVIDER": "brevo", "BREVO_API_KEY": "k"})
+    assert isinstance(sender, BrevoSms)
+    assert sender.sender == "Illawarra"  # 11-letter limit; body names the practice
+    assert sms_sender_from_env({"SMS_PROVIDER": "brevo"}) is None
+    custom = sms_sender_from_env(
+        {"SMS_PROVIDER": "brevo", "BREVO_API_KEY": "k", "SMS_FROM": "IllawarraDC"}
+    )
+    assert custom.sender == "IllawarraDC"
+    with pytest.raises(ValueError):
+        BrevoSms(api_key="k", sender="Illawarra Dentists")
+
+
+async def test_brevo_posts_a_transactional_sms(monkeypatch) -> None:
+    seen = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps({"messageId": 1511882900176220}).encode()
+
+    def fake_urlopen(request, timeout):
+        seen["url"] = request.full_url
+        seen["key"] = request.headers["Api-key"]
+        seen["body"] = json.loads(request.data)
+        return _Resp()
+
+    monkeypatch.setattr("sms.urlopen", fake_urlopen)
+    result = await BrevoSms(api_key="KEY").send("+61474470332", "hello")
+    assert result == {"ok": True, "id": "1511882900176220"}
+    assert seen["url"] == "https://api.brevo.com/v3/transactionalSMS/send"
+    assert seen["key"] == "KEY"
+    assert seen["body"] == {
+        "sender": "Illawarra",
+        "recipient": "61474470332",
+        "content": "hello",
+        "type": "transactional",
+        "tag": "ava-booking",
+    }
+
+
+async def test_brevo_failure_is_reported_not_raised(monkeypatch) -> None:
+    def boom(request, timeout):
+        raise OSError("402 not enough credits")
+
+    monkeypatch.setattr("sms.urlopen", boom)
+    result = await BrevoSms(api_key="k").send("+61474470332", "hi")
+    assert result["ok"] is False
+    assert "credits" in result["error"]
 
 
 # --- Ava sends it --------------------------------------------------------------

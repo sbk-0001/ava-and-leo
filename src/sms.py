@@ -2,7 +2,15 @@
 
 Every text is from the practice, Illawarra Dentists, and then names the clinic
 the appointment is at. Texts go only to an Australian mobile the caller has
-confirmed, and only when a provider is configured:
+confirmed, and only when a provider is configured.
+
+Brevo (Strategybyte's prepaid SMS credits - the live path):
+
+    SMS_PROVIDER=brevo
+    BREVO_API_KEY=...
+    SMS_FROM=Illawarra               # optional; at most 11 letters/digits
+
+Telnyx (needs an SMS-capable number; the voice DID cannot text):
 
     SMS_PROVIDER=telnyx
     TELNYX_API_KEY=...               # Telnyx portal > API keys
@@ -13,7 +21,8 @@ confirmed, and only when a provider is configured:
 SMS_PROVIDER=memory keeps texts in memory (tests, demos). Anything else: no
 texts, and Ava never mentions one.
 
-Docs: https://developers.telnyx.com/api/messaging/send-message
+Docs: https://developers.brevo.com/reference/send-async-transactional-sms
+      https://developers.telnyx.com/api/messaging/send-message
 """
 
 from __future__ import annotations
@@ -35,6 +44,10 @@ logger = logging.getLogger("ava.sms")
 
 TextKind = Literal["booked", "moved", "cancelled"]
 TELNYX_URL = "https://api.telnyx.com/v2/messages"
+BREVO_URL = "https://api.brevo.com/v3/transactionalSMS/send"
+DEFAULT_SENDER_NAME = "Illawarra"
+_ALNUM_SENDER_RE = re.compile(r"^[A-Za-z0-9]{1,11}$")
+_NUMERIC_SENDER_RE = re.compile(r"^\+?\d{12,15}$")
 _MOBILE_RE = re.compile(r"^04\d{8}$")
 
 
@@ -154,12 +167,69 @@ class TelnyxSms:
         try:
             return await asyncio.to_thread(self._post, to, text)
         except Exception as exc:  # the call must go on regardless
-            detail = str(exc)
-            read = getattr(exc, "read", None)
-            if callable(read):
-                with contextlib.suppress(Exception):
-                    detail = f"{detail}: {read().decode(errors='replace')[:200]}"
+            detail = _error_detail(exc)
             logger.warning("telnyx sms failed to=%s error=%s", to[-3:], detail)
+            return {"ok": False, "error": detail}
+
+
+def _error_detail(exc: Exception) -> str:
+    detail = str(exc)
+    read = getattr(exc, "read", None)
+    if callable(read):
+        with contextlib.suppress(Exception):
+            detail = f"{detail}: {read().decode(errors='replace')[:200]}"
+    return detail
+
+
+class BrevoSms:
+    """Brevo transactional SMS (Strategybyte's prepaid credits)."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        sender: str = DEFAULT_SENDER_NAME,
+        tag: str = "ava-booking",
+        timeout_s: float = 10.0,
+    ) -> None:
+        if not (_ALNUM_SENDER_RE.match(sender) or _NUMERIC_SENDER_RE.match(sender)):
+            raise ValueError(
+                "Brevo sender must be up to 11 letters/digits, or a 12-15 digit number"
+            )
+        self.api_key = api_key
+        self.sender = sender
+        self.tag = tag
+        self.timeout_s = timeout_s
+
+    def _post(self, to: str, text: str) -> dict[str, Any]:
+        body = {
+            "sender": self.sender,
+            "recipient": re.sub(r"\D", "", to),
+            "content": text,
+            "type": "transactional",
+            "tag": self.tag,
+        }
+        request = Request(
+            BREVO_URL,
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "api-key": self.api_key,
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        with urlopen(request, timeout=self.timeout_s) as response:
+            payload = json.loads(response.read() or b"{}")
+        message_id = payload.get("messageId") or payload.get("reference")
+        return {"ok": True, "id": str(message_id) if message_id else None}
+
+    async def send(self, to: str, text: str) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(self._post, to, text)
+        except Exception as exc:  # the call must go on regardless
+            detail = _error_detail(exc)
+            logger.warning("brevo sms failed to=%s error=%s", to[-3:], detail)
             return {"ok": False, "error": detail}
 
 
@@ -170,6 +240,17 @@ def sms_sender_from_env(env: Mapping[str, str] | None = None) -> SmsSender | Non
     provider = str(environ.get("SMS_PROVIDER") or "").strip().lower()
     if provider == "memory":
         return MemorySms()
+    if provider == "brevo":
+        key = str(environ.get("BREVO_API_KEY") or "").strip()
+        if not key:
+            logger.warning("SMS_PROVIDER=brevo but BREVO_API_KEY is empty")
+            return None
+        name = str(environ.get("SMS_FROM") or "").strip() or DEFAULT_SENDER_NAME
+        try:
+            return BrevoSms(api_key=key, sender=name)
+        except ValueError:
+            logger.warning("SMS_FROM %r is not a valid Brevo sender", name)
+            return None
     if provider == "telnyx":
         key = str(environ.get("TELNYX_API_KEY") or "").strip()
         sender = str(environ.get("SMS_FROM") or "").strip()

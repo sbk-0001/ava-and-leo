@@ -1,0 +1,4 @@
+{
+  "name": "Ava and Leo (LiveKit Agents)",
+  "install": "curl -LsSf https://astral.sh/uv/install.sh | sh && . \"$HOME/.local/bin/env\" && uv sync --locked && uv run --module livekit.agents download-files"
+}

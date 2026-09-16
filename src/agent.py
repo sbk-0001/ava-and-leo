@@ -613,6 +613,7 @@ async def my_agent(ctx: JobContext):
             raw_digits = _sub(r"\D", "", ani)
             if raw_digits.startswith("61") and len(raw_digits) == 11:
                 call_state.caller_mobile = "0" + raw_digits[2:]
+                call_state.mobile_confirmed = True  # it is the line they rang from
     else:
         call_state.channel = "web"
     logger.info(
@@ -691,11 +692,16 @@ async def my_agent(ctx: JobContext):
 
         def _on_speech_created(*_args: Any, **_kwargs: Any) -> None:
             filler_player.notify_model_audio()
+            # The model's own voice is audio too. Without this the dead-air
+            # monitor only heard filler clips and logged 47s of "silence"
+            # while Ava was mid-sentence.
+            dead_air.note_audio()
 
         def _on_agent_state(ev: Any) -> None:
             state_name = str(getattr(ev, "new_state", "") or "").lower()
             if "speaking" in state_name:
                 filler_player.notify_model_audio()
+                dead_air.note_audio()
             else:
                 # thinking / listening / idle — mouth is free for tool fillers.
                 filler_player.notify_model_audio_ended()

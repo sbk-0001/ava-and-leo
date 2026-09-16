@@ -23,6 +23,7 @@ from livekit.plugins import openai
 from openai.types.beta.realtime.session import TurnDetection
 
 from booking import (
+    PLACEHOLDER_CLINICIANS,
     BookingProvider,
     empty_tool_args_result,
     filter_past_slots,
@@ -32,7 +33,7 @@ from booking import (
     unwrap_practice_client,
 )
 from call_log import CallLog
-from call_state import CallState, booking_is_locked
+from call_state import CallState, booking_is_locked, spoken_mobile
 from caller_store import CallerStore, get_shared_caller_store, upsert_from_booking
 from date_context import current_time_sydney as current_time_sydney_fn
 from date_context import resolve_date_phrase as resolve_date_phrase_fn
@@ -82,6 +83,12 @@ AVA_SPEECH_SPEED = 0.9
 # the turn filter then drops as non_task_language and the caller gets silence.
 AVA_TRANSCRIPTION_LANGUAGE = "en"
 AVA_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
+# Biases the transcriber toward what this call actually contains. Without it,
+# stray syllables came back in Cyrillic, Chinese and Portuguese.
+AVA_TRANSCRIPTION_PROMPT = (
+    "Australian English phone call to a dental receptionist. Names, appointment "
+    "days and times, and Australian mobile numbers spoken as digits."
+)
 AVA_TEMPERATURE = 0.95
 
 ENGLISH_ONLY_SCRIPT = (
@@ -95,6 +102,34 @@ ENGLISH_ONLY_CALLBACK_SCRIPT = (
 )
 # After this many notices, stop repeating and go for the callback instead.
 ENGLISH_ONLY_NOTICE_LIMIT = 2
+
+# Seeded diary rows for sites whose dentists are not named in the brief.
+# Never spoken: "dentist available dentist" went out on a live call.
+
+
+def book_confirm_facts(name: str, result: Mapping[str, Any]) -> str:
+    """The locked-booking facts Ava confirms, with no invented dentist."""
+    clinician = str(result.get("clinician") or "").strip()
+    where = ""
+    try:
+        branch = get_branch(str(result.get("branch_id") or ""))
+        where = f" at {branch.trading_name} in {branch.suburb}"
+    except Exception:
+        pass
+    if not clinician or clinician.lower() in PLACEHOLDER_CLINICIANS:
+        who = (
+            f"The dentist is not named yet - say 'with the team{where}'. "
+            "Never invent a dentist's name."
+        )
+    else:
+        who = f"dentist {clinician}{where}."
+    return (
+        f"Booking is locked for {name}. "
+        f"Date {result.get('date') or ''}, time {result.get('time') or ''}, {who} "
+        "Confirm those facts once and say they're all set. "
+        "Do not go quiet. Do not invent extra details. Do not promise a text or an email."
+    )
+
 
 EMERGENCY_000_SCRIPT = (
     "This sounds like it needs emergency care. Please hang up and call triple zero, "
@@ -140,6 +175,7 @@ def ava_realtime_model() -> openai.realtime.RealtimeModel:
             kwargs["input_audio_transcription"] = InputAudioTranscription(
                 model=AVA_TRANSCRIPTION_MODEL,
                 language=AVA_TRANSCRIPTION_LANGUAGE,
+                prompt=AVA_TRANSCRIPTION_PROMPT,
             )
         except Exception:  # pragma: no cover - older SDK shapes
             logger.exception("could not pin transcription language; using default")
@@ -434,13 +470,7 @@ class AvaReceptionist(Agent):
     ) -> None:
         """Start confirmation speech immediately. Do not also play a bank clip."""
         name = self.state.caller_name or "the caller"
-        facts = (
-            f"Booking is locked for {name}. "
-            f"Date {result.get('date') or ''}, time {result.get('time') or ''}, "
-            f"dentist {result.get('clinician') or ''}. "
-            "Confirm those facts once and say they're all set. "
-            "Do not go quiet. Do not invent extra details."
-        )
+        facts = book_confirm_facts(name, result)
         self.state.book_confirm_kicked_at = time.perf_counter()
         self._kick_locked_speech(context, facts)
 
@@ -967,6 +997,7 @@ class AvaReceptionist(Agent):
         mobile: str | None = None,
         patient_id: str | None = None,
         date_of_birth: str | None = None,
+        second_appointment: bool = False,
     ) -> dict[str, Any]:
         """Book only an exact slot_id from check_availability. Never invent ids.
 
@@ -980,6 +1011,10 @@ class AvaReceptionist(Agent):
             reason: Short reason for the visit.
             name: Caller's name for a new patient.
             mobile: Australian mobile.
+            second_appointment: Only true when the caller has one booking locked
+                on this call and clearly wants a second, separate one (e.g. for
+                a child). Correcting details or moving a time is never a
+                second appointment.
             patient_id: Patient id from lookup_patient, if known.
             date_of_birth: Date of birth if given, preferably YYYY-MM-DD.
         """
@@ -1015,12 +1050,26 @@ class AvaReceptionist(Agent):
                 }
             if not is_canonical_slot_id(slot_id):
                 return invalid_slot_id_result(slot_id)
-            selected = self.state.booking_flow.select_slot(slot_id)
-            if not selected.get("ok"):
-                return selected
-            held = self.state.booking_flow.hold(slot_id)
-            if not held.get("ok"):
-                return held
+            # One booking per call unless they ask for a second one. Correcting
+            # a phone number re-ran this on the same slot, got slot_gone (their
+            # own booking held it), and booked a second time next to it.
+            prior = self.state.last_book_result or {}
+            if booking_is_locked(prior) and not second_appointment:
+                return {
+                    "ok": False,
+                    "confirmed": False,
+                    "reason": "already_booked",
+                    "booking_id": prior.get("booking_id"),
+                    "date": prior.get("date"),
+                    "time": prior.get("time"),
+                    "clinician": prior.get("clinician"),
+                    "note": (
+                        "This caller already has a booking locked on this call. Do not "
+                        "book again. Wrong mobile: confirm_mobile. Different time: "
+                        "reschedule_appointment. A genuinely separate second "
+                        "appointment: book_appointment with second_appointment=true."
+                    ),
+                }
             if name:
                 self.state.correct_caller_name(name)
                 self._persist_caller_name()
@@ -1029,6 +1078,26 @@ class AvaReceptionist(Agent):
             )
             if not mobile_result.get("ok") and not patient_id:
                 return mobile_result
+            if not patient_id and not self.state.mobile_confirmed:
+                spoken = spoken_mobile(self.state.caller_mobile)
+                return {
+                    "ok": False,
+                    "confirmed": False,
+                    "reason": "mobile_unconfirmed",
+                    "mobile": self.state.caller_mobile,
+                    "spoken": spoken,
+                    "say": f"Just to double-check, I've got your mobile as {spoken} - is that right?",
+                    "note": (
+                        "Read the digits back exactly as in `spoken`, wait for yes or "
+                        "no, then call confirm_mobile. Do not book yet. Do not say confirmed."
+                    ),
+                }
+            selected = self.state.booking_flow.select_slot(slot_id)
+            if not selected.get("ok"):
+                return selected
+            held = self.state.booking_flow.hold(slot_id)
+            if not held.get("ok"):
+                return held
             clinic_id = self._select_branch(branch)
             booked = await self.booking.book_appointment(
                 branch=clinic_id,
@@ -1043,11 +1112,14 @@ class AvaReceptionist(Agent):
             booked.setdefault("slot_id", slot_id)
             return booked
 
-        result = self.state.record_book_result(
-            await self._dispatch_with_ladder(
-                context, _run, in_flight="book_appointment"
-            )
+        raw = await self._dispatch_with_ladder(
+            context, _run, in_flight="book_appointment"
         )
+        if raw.get("reason") in {"mobile_unconfirmed", "already_booked"}:
+            # Not a booking outcome; do not push the booking flow into failure.
+            result = dict(raw)
+        else:
+            result = self.state.record_book_result(raw)
         if result.get("ok") and result.get("confirmed"):
             try:
                 upsert_from_booking(self.caller_store, self.state, result)
@@ -1183,6 +1255,8 @@ class AvaReceptionist(Agent):
                     and not self.state.name_corrected
                 ):
                     self.state.caller_name = patients[0].get("name")
+                    # The digits found a record, so they are right - no read-back needed.
+                    self.state.mobile_confirmed = True
             public = dict(looked)
             if not self.state.dob_verified:
                 public["is_existing_patient"] = None
@@ -1243,6 +1317,56 @@ class AvaReceptionist(Agent):
             await self._speak_bank_now(pool, lines)
         self._log_tool("verify_date_of_birth", result, {"date_of_birth": "given"})
         return result
+
+    @function_tool()
+    async def confirm_mobile(
+        self, context: RunContext, correct: bool, mobile: str | None = None
+    ) -> dict[str, Any]:
+        """Confirm the mobile you just read back, or replace it.
+
+        When a tool returns needs_confirmation or mobile_unconfirmed, read the
+        digits in `spoken` back to the caller and wait. Yes: call this with
+        correct=true. No: ask for the right number and call this with
+        correct=false and that number, then read that back too. If a booking is
+        already locked, a corrected number updates that booking - never book
+        the appointment again.
+
+        Args:
+            correct: True if the caller agreed the read-back was right.
+            mobile: The replacement number, only when correct is false.
+        """
+        del context
+        result = self.state.confirm_mobile(correct=correct, mobile=mobile)
+        if result.get("ok") and correct:
+            self._persist_mobile_to_booking()
+        self._log_tool(
+            "confirm_mobile",
+            result,
+            {"correct": correct, "mobile": "given" if mobile else None},
+        )
+        return result
+
+    def _persist_mobile_to_booking(self) -> None:
+        """A confirmed correction reaches the locked booking and the caller record."""
+        mobile = self.state.caller_mobile
+        if not mobile:
+            return
+        locked = self.state.last_book_result or {}
+        if booking_is_locked(locked) and locked.get("patient_id"):
+            client = unwrap_practice_client(self.booking)
+            if client is not None:
+                try:
+                    client.update_patient_mobile(
+                        mobile=mobile, patient_id=str(locked["patient_id"])
+                    )
+                except Exception:
+                    logger.exception("could not update the booked patient's mobile")
+        try:
+            self.caller_store.touch(
+                mobile, name=self.state.caller_name, preferred_branch=self.state.branch
+            )
+        except Exception:
+            logger.exception("caller store mobile upsert failed")
 
     @function_tool()
     async def correct_caller_name(

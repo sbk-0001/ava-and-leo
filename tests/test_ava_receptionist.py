@@ -191,6 +191,8 @@ async def test_practice_tools_notify_desk_including_booking_failures(
 
     found = await ava.lookup_patient(dummy, mobile="0412222333")
     assert found["ok"] is True
+    # No record matched, so the number has to be read back and agreed.
+    ava.state.confirm_mobile(correct=True)
     available = await ava.check_availability(
         dummy, appointment_type="check-up", date_range="2026-09-16"
     )
@@ -282,6 +284,8 @@ async def test_book_appointment_slot_gone_is_not_verbally_confirmed(
     ava.state.booking_flow.offer_slots(
         [{"slot_id": "slot_shellharbour_2026-09-15_1430_dr-mohit-tolani"}]
     )
+    ava.state.register_mobile("0412334556")
+    ava.state.confirm_mobile(correct=True)
     result = await ava.book_appointment(
         SimpleNamespace(),
         slot_id="slot_shellharbour_2026-09-15_1430_dr-mohit-tolani",
@@ -643,3 +647,168 @@ async def test_emergency_script_uses_generate_reply_on_realtime(monkeypatch) -> 
     assert session.replies
     assert EMERGENCY_000_SCRIPT in str(session.replies[0].get("instructions") or "")
     assert session.say_calls == []
+
+
+def _booking_ava(
+    monkeypatch, *, slot_ids=("slot_woonona_2026-09-17_0830_available-dentist",)
+):
+    from booking import MemoryBookingProvider
+    from call_state import CallState
+    from practice import PracticeClient
+
+    practice = PracticeClient(mode="mock")
+    for sid in slot_ids:
+        _, branch, day, hhmm, *_ = sid.split("_")
+        practice.seed_slot(
+            slot_id=sid,
+            branch_id=branch,
+            date=day,
+            time=f"{hhmm[:2]}:{hhmm[2:]}",
+            clinician="available dentist",
+        )
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    state = CallState(branch="woonona", now=datetime(2026, 9, 16, 20, 0, tzinfo=SYDNEY))
+    ava = AvaReceptionist(
+        state=state,
+        booking=MemoryBookingProvider(practice, now_fn=lambda: state.now),
+    )
+
+    async def _run_only(self, context, factory, **_kwargs):
+        return await factory()
+
+    monkeypatch.setattr(AvaReceptionist, "_dispatch_with_ladder", _run_only)
+    monkeypatch.setattr(ava, "_kick_book_confirm", lambda *_a, **_k: None)
+    return ava, practice
+
+
+async def _offer_tomorrow(ava):
+    """Ava can only book a time she offered, so offer before booking."""
+    offered = await ava.check_availability(
+        SimpleNamespace(), appointment_type="emergency", date_range="2026-09-17"
+    )
+    assert offered["ok"] is True and offered["slots"], offered
+
+
+async def test_booking_waits_for_the_mobile_to_be_read_back(monkeypatch) -> None:
+    ava, practice = _booking_ava(monkeypatch)
+    ctx = SimpleNamespace()
+    ava.state.observe_user_text("I want to book")
+    await _offer_tomorrow(ava)
+
+    first = await ava.book_appointment(
+        ctx,
+        slot_id="slot_woonona_2026-09-17_0830_available-dentist",
+        reason="broken tooth",
+        name="Robert",
+        mobile="0470 470 332",
+    )
+    assert first["ok"] is False
+    assert first["reason"] == "mobile_unconfirmed"
+    assert "zero four seven zero" in first["spoken"]
+    assert not practice.bookings, "nothing may be booked before the number is confirmed"
+
+    await ava.confirm_mobile(ctx, correct=True)
+    booked = await ava.book_appointment(
+        ctx,
+        slot_id="slot_woonona_2026-09-17_0830_available-dentist",
+        reason="broken tooth",
+        name="Robert",
+        mobile="0470 470 332",
+    )
+    assert booked["confirmed"] is True
+
+
+async def test_one_booking_per_call_unless_asked_for_a_second(monkeypatch) -> None:
+    """Correcting a number re-ran book_appointment: 8:30 came back slot_gone
+    (his own booking held it) so she booked 9:00 as well. Two bookings."""
+    ava, practice = _booking_ava(
+        monkeypatch,
+        slot_ids=(
+            "slot_woonona_2026-09-17_0830_available-dentist",
+            "slot_woonona_2026-09-17_0900_available-dentist",
+        ),
+    )
+    ctx = SimpleNamespace()
+    ava.state.register_mobile("0474 470 332")
+    ava.state.confirm_mobile(correct=True)
+    await _offer_tomorrow(ava)
+    first = await ava.book_appointment(
+        ctx,
+        slot_id="slot_woonona_2026-09-17_0830_available-dentist",
+        reason="broken tooth",
+        name="Robert",
+    )
+    assert first["confirmed"] is True
+
+    again = await ava.book_appointment(
+        ctx,
+        slot_id="slot_woonona_2026-09-17_0900_available-dentist",
+        reason="broken tooth",
+        name="Robert",
+    )
+    assert again["ok"] is False
+    assert again["reason"] == "already_booked"
+    assert again["booking_id"] == first["booking_id"]
+    assert len([b for b in practice.bookings.values() if not b.cancelled]) == 1
+
+    second = await ava.book_appointment(
+        ctx,
+        slot_id="slot_woonona_2026-09-17_0900_available-dentist",
+        reason="also my daughter",
+        name="Robert",
+        second_appointment=True,
+    )
+    assert second["confirmed"] is True
+
+
+async def test_correcting_the_mobile_after_booking_updates_not_rebooks(
+    monkeypatch,
+) -> None:
+    ava, practice = _booking_ava(monkeypatch)
+    ctx = SimpleNamespace()
+    ava.state.register_mobile("0470 470 332")
+    ava.state.confirm_mobile(correct=True)
+    await _offer_tomorrow(ava)
+    booked = await ava.book_appointment(
+        ctx,
+        slot_id="slot_woonona_2026-09-17_0830_available-dentist",
+        reason="broken tooth",
+        name="Robert",
+    )
+    assert booked["confirmed"] is True
+
+    fixed = await ava.confirm_mobile(ctx, correct=False, mobile="0474 470 009")
+    assert fixed["needs_confirmation"] is True
+    await ava.confirm_mobile(ctx, correct=True)
+
+    patient = practice.patients[booked["patient_id"]]
+    assert patient.phone.replace(" ", "") == "0474470009"
+    assert len([b for b in practice.bookings.values() if not b.cancelled]) == 1
+
+
+def test_locked_confirmation_never_says_dentist_available_dentist() -> None:
+    from ava_receptionist import book_confirm_facts
+
+    unnamed = book_confirm_facts(
+        "Robert",
+        {
+            "date": "2026-09-17",
+            "time": "09:00",
+            "clinician": "available dentist",
+            "branch_id": "woonona",
+        },
+    )
+    assert "available dentist" not in unnamed.lower()
+    assert "woonona" in unnamed.lower()
+    assert "never invent" in unnamed.lower() or "do not invent" in unnamed.lower()
+
+    named = book_confirm_facts(
+        "Robert",
+        {
+            "date": "2026-09-17",
+            "time": "09:00",
+            "clinician": "Dr Mohit Tolani",
+            "branch_id": "shellharbour",
+        },
+    )
+    assert "Dr Mohit Tolani" in named

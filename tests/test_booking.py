@@ -408,3 +408,14 @@ async def test_memory_provider_keeps_full_open_slot_list() -> None:
     )
     assert result["ok"] is True
     assert len(result["slots"]) > 12
+
+
+def test_spoken_offer_never_says_available_dentist() -> None:
+    """Woonona has no named dentists; the placeholder must not be spoken."""
+    slots = [
+        {"date": "2026-09-17", "time": "08:30", "clinician": "available dentist"},
+        {"date": "2026-09-17", "time": "09:00", "clinician": "available dentist"},
+    ]
+    line = spoken_two_slot_offer(slots, now=SYDNEY_NOW)
+    assert "available dentist" not in line.lower()
+    assert "8:30" in line or "half past" in line.lower()

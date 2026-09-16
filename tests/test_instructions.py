@@ -54,3 +54,17 @@ def test_ava_instructions_include_verbatim_plus_facts() -> None:
     assert "(02) 4288 0737" in text
     assert CALIBRATION_END in text
     assert Path(INSTRUCTIONS_PATH).is_file()
+
+
+def test_ava_never_promises_a_text_reminder() -> None:
+    """There is no SMS integration. She told Robert he'd get a text the day before."""
+    text = INSTRUCTIONS_PATH.read_text(encoding="utf-8").lower()
+    assert "text the day before" not in text
+    assert "text reminder" not in text
+    assert "never promise a text" in text
+
+
+def test_instructions_require_reading_the_mobile_back() -> None:
+    text = INSTRUCTIONS_PATH.read_text(encoding="utf-8").lower()
+    assert "read the number back" in text
+    assert "confirm_mobile" in text

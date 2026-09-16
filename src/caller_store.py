@@ -241,6 +241,7 @@ def apply_record_to_state(state: Any, record: CallerRecord) -> None:
         national = record.mobile or state.caller_mobile
     if national and not state.caller_mobile:
         state.caller_mobile = national
+        state.mobile_confirmed = True  # confirmed on an earlier call
     if record.preferred_branch and not getattr(state, "preferred_branch", None):
         state.preferred_branch = record.preferred_branch
     state.usual_dentist = record.dentist_preference

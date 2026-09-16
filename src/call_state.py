@@ -214,6 +214,43 @@ def is_valid_au_mobile(value: str | None) -> bool:
     return bool(_MOBILE_RE.match(digits if digits.startswith("0") else "0" + digits))
 
 
+def normalize_au_mobile(value: str | None) -> str:
+    digits = re.sub(r"\D", "", value or "")
+    if digits.startswith("61") and len(digits) == 11:
+        digits = "0" + digits[2:]
+    if digits and not digits.startswith("0"):
+        digits = "0" + digits
+    return digits
+
+
+_DIGIT_WORDS = {
+    "0": "zero",
+    "1": "one",
+    "2": "two",
+    "3": "three",
+    "4": "four",
+    "5": "five",
+    "6": "six",
+    "7": "seven",
+    "8": "eight",
+    "9": "nine",
+}
+
+
+def spoken_mobile(value: str | None) -> str:
+    """0474470332 -> 'zero four seven four, four seven zero, three three two'.
+
+    Read back in the 4-3-3 groups Australians use, one digit at a time, so the
+    caller can catch a wrong digit. The Realtime model mis-hears digit strings
+    often enough that a plausible number must never be trusted unread.
+    """
+    digits = normalize_au_mobile(value)
+    groups = (digits[:4], digits[4:7], digits[7:]) if len(digits) == 10 else (digits,)
+    return ", ".join(
+        " ".join(_DIGIT_WORDS[c] for c in g if c in _DIGIT_WORDS) for g in groups if g
+    )
+
+
 def offer_branch_for_suburb(suburb: str, current_branch: str) -> str | None:
     """If the suburb clearly suits another clinic, return that branch id."""
     key = re.sub(r"\s+", " ", suburb.strip().lower())
@@ -359,6 +396,9 @@ class CallState:
     known_caller: bool = False
     ani: str | None = None
     channel: str = "unknown"
+    # A mobile only counts once it has been read back and the caller said yes,
+    # or it came from the line they are calling on (ANI) / their stored record.
+    mobile_confirmed: bool = False
     dob_verified: bool = False
     dob_failed: bool = False
     dob_attempts: int = 0
@@ -376,6 +416,10 @@ class CallState:
     book_confirm_kicked_at: float | None = None
 
     def __post_init__(self) -> None:
+        if self.caller_mobile and is_valid_au_mobile(self.caller_mobile):
+            # Supplied by the system (ANI / stored record), not relayed by the
+            # model, so there is nothing to read back.
+            self.mobile_confirmed = True
         live = datetime.now(SYDNEY)
         if self.now is not None:
             if self.now.tzinfo is None:
@@ -808,6 +852,62 @@ class CallState:
         return int(self.ask_counts.get(field, 0)) >= MAX_ASKS
 
     def register_mobile(self, raw: str | None) -> dict[str, Any]:
+        """Store a valid mobile, then require it to be read back.
+
+        Regression for job AJ_hSBmKJ8gVkR8: the caller said 0474 470 332, the
+        model passed 0470 470 332, and Ava read her own wrong number back to
+        him. A new number is stored but not confirmed until confirm_mobile.
+        """
+        result = self._register_mobile_raw(raw)
+        if not result.get("ok"):
+            return result
+        if result.get("already_known"):
+            return result
+        self.mobile_confirmed = False
+        spoken = spoken_mobile(self.caller_mobile)
+        result.update(
+            {
+                "needs_confirmation": True,
+                "spoken": spoken,
+                "say": f"Just to double-check, I've got your mobile as {spoken} - is that right?",
+                "note": (
+                    "Read the digits back exactly as in `spoken` and wait for yes or no. "
+                    "Then call confirm_mobile. Do not book until it is confirmed."
+                ),
+            }
+        )
+        return result
+
+    def confirm_mobile(
+        self, *, correct: bool, mobile: str | None = None
+    ) -> dict[str, Any]:
+        """The caller answered the read-back. Yes locks it; no takes a new number."""
+        if correct:
+            if not is_valid_au_mobile(self.caller_mobile):
+                return {
+                    "ok": False,
+                    "reason": "no_mobile",
+                    "note": "Ask for the mobile first.",
+                }
+            self.mobile_confirmed = True
+            return {
+                "ok": True,
+                "confirmed": True,
+                "mobile": self.caller_mobile,
+                "note": "Mobile confirmed. Do not read it back again.",
+            }
+        self.mobile_confirmed = False
+        if not mobile:
+            return {
+                "ok": False,
+                "reason": "need_correct_mobile",
+                "say": "No worries - what's the right number?",
+                "note": "Ask for the correct number, then call confirm_mobile again with it.",
+            }
+        self.caller_mobile = None
+        return self.register_mobile(mobile)
+
+    def _register_mobile_raw(self, raw: str | None) -> dict[str, Any]:
         """Store a valid mobile, or increment the hard ask counter."""
         if (
             self.caller_mobile
@@ -966,6 +1066,23 @@ class CallState:
             self.escalation_flag and self.urgency_level == "emergency_000"
         )
 
+    def _clinic_line(self) -> str:
+        where = f"- clinic: {self.branch_name} (id {self.branch}). "
+        if self.channel == "web":
+            # Nobody dialled anything on a desk call; staff picked a clinic tab.
+            # Ava told a web caller "that's the one you called" and he replied
+            # "I didn't call her".
+            return (
+                where + "This is a web call from the front desk and staff picked this "
+                "clinic on the desk. Nobody dialled a number to get here, so never "
+                "mention a number they phoned. Start here, and confirm the clinic "
+                "suits them.\n"
+            )
+        return (
+            where + "They rang this clinic's number, so start here; move them to "
+            "another clinic if that suits them better.\n"
+        )
+
     def prompt_block(self) -> str:
         """Compact state the model must not contradict. Flow is already decided."""
         mobile_asks = int(self.ask_counts.get("mobile", 0))
@@ -975,14 +1092,19 @@ class CallState:
             if self.offered_branch
             else "none"
         )
+        mobile_note = (
+            " (read it back digit by digit and call confirm_mobile before booking)"
+            if self.caller_mobile and not self.mobile_confirmed
+            else ""
+        )
         return (
             "CALL STATE (enforced in code — do not contradict):\n"
             f"{self.known_facts_block()}\n"
             f"- answering as: {GROUP_TRADING_NAME}\n"
-            f"- clinic: {self.branch_name} (id {self.branch}). They rang this clinic's "
-            "number, so start here; move them to another clinic if that suits them better.\n"
+            f"{self._clinic_line()}"
             f"- caller_name: {self.caller_name or 'unknown'}\n"
             f"- caller_mobile: {self.caller_mobile or 'unknown'}\n"
+            f"- mobile_confirmed: {self.mobile_confirmed}{mobile_note}\n"
             f"- is_existing_patient: {self.is_existing_patient}\n"
             f"- intent: {self.intent or 'unknown'}\n"
             f"- appointment_type: {self.appointment_type or 'unknown'}\n"

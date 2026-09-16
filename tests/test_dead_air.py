@@ -52,3 +52,27 @@ def test_audio_resets_the_timer() -> None:
     assert monitor.check() is None
     clock["t"] = 2.5
     assert monitor.check() is not None
+
+
+def test_model_speech_counts_as_audio_for_dead_air() -> None:
+    """DEAD_AIR reported 47s of silence while Ava was mid-sentence.
+
+    The monitor only heard about filler clips, never the Realtime model's own
+    speech, so every alarm measured time since the last filler - not silence.
+    """
+    from pathlib import Path
+
+    clock = [1000.0]
+    monitor = DeadAirMonitor(call_id="t", branch="shellharbour", clock=lambda: clock[0])
+    monitor.set_in_flight("tool", pending=True)
+    clock[0] += 40.0
+    monitor.note_audio()  # the model just spoke
+    clock[0] += 0.05
+    assert monitor.check() is None
+
+    src = Path(__file__).resolve().parents[1] / "src" / "agent.py"
+    text = src.read_text()
+    hook = text[
+        text.index("def _on_speech_created") : text.index("def _on_agent_state")
+    ]
+    assert "dead_air.note_audio()" in hook

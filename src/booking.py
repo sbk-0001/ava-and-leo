@@ -326,6 +326,9 @@ def filter_slots_by_clinician(
     ]
 
 
+PLACEHOLDER_CLINICIANS = frozenset({"available dentist", "any", "any dentist", "tbc"})
+
+
 def spoken_two_slot_offer(
     slots: list[dict[str, Any]],
     *,
@@ -348,7 +351,9 @@ def spoken_two_slot_offer(
         if time_s:
             when = f"{when} at {time_s}"
         name = str(slot.get("clinician") or "").strip()
-        if name:
+        # Sites without named dentists are seeded with a placeholder; it is a
+        # diary key, not something to say ("with available dentist").
+        if name and name.lower() not in PLACEHOLDER_CLINICIANS:
             when = f"{when} with {name}"
         parts.append(when)
     if len(parts) == 1:

@@ -495,6 +495,23 @@ class PracticeClient:
         }
         self.messages = [Message(**item) for item in payload.get("messages", [])]
 
+    def update_patient_mobile(
+        self,
+        *,
+        mobile: str,
+        patient_id: str | None = None,
+    ) -> bool:
+        """Correct a patient's mobile in place. Their booking stays as it is."""
+        digits = _norm_phone(mobile)
+        if not digits:
+            return False
+        patient = self.patients.get(patient_id or "")
+        if patient is None:
+            return False
+        patient.phone = digits
+        self.save()
+        return True
+
     def record_date_of_birth(
         self,
         *,

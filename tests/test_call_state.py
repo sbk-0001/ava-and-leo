@@ -249,3 +249,63 @@ def test_a_wrong_dob_still_fails_when_one_is_on_file() -> None:
     good = state.verify_dob("1980-08-01")
     assert good["ok"] is True
     assert state.dob_verified is True
+
+
+def test_spoken_mobile_reads_digits_in_groups() -> None:
+    from call_state import spoken_mobile
+
+    assert (
+        spoken_mobile("0474470332")
+        == "zero four seven four, four seven zero, three three two"
+    )
+    assert (
+        spoken_mobile("+61 474 470 332")
+        == "zero four seven four, four seven zero, three three two"
+    )
+
+
+def test_new_mobile_must_be_read_back_before_it_counts() -> None:
+    """Regression for the 16 Sep web call (job AJ_hSBmKJ8gVkR8).
+
+    The caller said 0474 470 332; the model passed 0470 470 332 to the tool and
+    then read its own wrong number back to him. A plausible ten-digit number is
+    not the same as the right one - it has to be read back and confirmed.
+    """
+    state = CallState(branch="shellharbour")
+    result = state.register_mobile("0470 470 332")
+    assert result["ok"] is True
+    assert result["needs_confirmation"] is True
+    assert result["spoken"] == "zero four seven zero, four seven zero, three three two"
+    assert state.mobile_confirmed is False
+
+    confirmed = state.confirm_mobile(correct=True)
+    assert confirmed["ok"] is True
+    assert state.mobile_confirmed is True
+    assert state.caller_mobile == "0470470332"
+
+
+def test_corrected_mobile_needs_reading_back_again() -> None:
+    state = CallState(branch="shellharbour")
+    state.register_mobile("0470 470 332")
+    fixed = state.confirm_mobile(correct=False, mobile="0474 470 009")
+    assert fixed["ok"] is True
+    assert fixed["needs_confirmation"] is True
+    assert state.caller_mobile == "0474470009"
+    assert state.mobile_confirmed is False
+    state.confirm_mobile(correct=True)
+    assert state.mobile_confirmed is True
+
+
+def test_web_call_prompt_does_not_claim_they_rang_a_number() -> None:
+    """On the desk there is no dialled number - staff picked the clinic tab.
+
+    Ava told a web caller "that's the one you called" and he replied
+    "I didn't call her".
+    """
+    web = CallState(branch="shellharbour", channel="web")
+    block = web.prompt_block().lower()
+    assert "they rang" not in block and "called" not in block
+    assert "desk" in block
+
+    phone = CallState(branch="shellharbour", channel="sip")
+    assert "rang this clinic" in phone.prompt_block().lower()

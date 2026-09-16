@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -18,6 +19,13 @@ from filler_player import FillerPlayer
 from phrase_pools import STAGE_1
 from practice import Booking, PracticeClient
 from turn_filter import classify_user_turn
+
+SYDNEY = ZoneInfo("Australia/Sydney")
+
+# Frozen Sydney clock. MemoryBookingProvider defaults now_fn to the live clock,
+# so an unpinned provider drops the seeded slots as past once real time moves
+# beyond them and these tests fail by calendar date, not by behaviour.
+SYDNEY_NOW = datetime(2026, 9, 15, 7, 0, tzinfo=SYDNEY)
 
 
 class _QuietPlayer:
@@ -238,11 +246,13 @@ async def test_cancel_resolves_by_ani_history_after_verify(
     apply_record_to_state(state, record)
     ava = AvaReceptionist(
         state=state,
-        booking=MemoryBookingProvider(client),
+        booking=MemoryBookingProvider(client, now_fn=lambda: SYDNEY_NOW),
         caller_store=store,
         filler_player=_QuietPlayer(),
     )
-    looked = await MemoryBookingProvider(client).lookup_patient(mobile="0449004305")
+    looked = await MemoryBookingProvider(
+        client, now_fn=lambda: SYDNEY_NOW
+    ).lookup_patient(mobile="0449004305")
     ava.state.pms_record = looked
     verified = ava.state.verify_dob("1988-03-12")
     assert verified["ok"] is True
@@ -286,7 +296,9 @@ async def test_cancel_ambiguous_lists_candidates_never_fakes_success(
     )
     ava = AvaReceptionist(
         state=state,
-        booking=MemoryBookingProvider(PracticeClient(mode="mock")),
+        booking=MemoryBookingProvider(
+            PracticeClient(mode="mock"), now_fn=lambda: SYDNEY_NOW
+        ),
         caller_store=store,
         filler_player=_QuietPlayer(),
     )
@@ -316,7 +328,9 @@ async def test_verified_dob_readback_allowed_unverified_refused(
     }
     ava = AvaReceptionist(
         state=state,
-        booking=MemoryBookingProvider(PracticeClient(mode="mock")),
+        booking=MemoryBookingProvider(
+            PracticeClient(mode="mock"), now_fn=lambda: SYDNEY_NOW
+        ),
         filler_player=_QuietPlayer(),
     )
     refused = await ava.read_date_of_birth(SimpleNamespace())
@@ -348,11 +362,11 @@ async def test_fillers_before_cancel_and_book_confirm_kicked_under_one_second(
         time="09:30",
         clinician="Dr Mohit Tolani",
     )
-    inner = MemoryBookingProvider(client)
+    inner = MemoryBookingProvider(client, now_fn=lambda: SYDNEY_NOW)
 
     class Slow(MemoryBookingProvider):
         def __init__(self) -> None:
-            super().__init__(client)
+            super().__init__(client, now_fn=lambda: SYDNEY_NOW)
             self.tool_ok_at: float | None = None
 
         async def book_appointment(self, **kwargs):  # type: ignore[no-untyped-def]

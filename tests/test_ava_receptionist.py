@@ -2,8 +2,9 @@
 
 import asyncio
 import inspect
-from datetime import date
+from datetime import date, datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -18,6 +19,15 @@ from ava_receptionist import (
     resolve_ava_voice,
     transfer_destination_for_branch,
 )
+
+SYDNEY = ZoneInfo("Australia/Sydney")
+
+# Frozen Sydney clock for the seeded diary. The mock diary opens at 08:00 on
+# 2026-09-15, so 07:00 that morning keeps every seeded slot in the future.
+# MemoryBookingProvider defaults now_fn to the live clock, so an unpinned
+# provider drops those slots as past once real time moves on and the test
+# starts failing by calendar date rather than by behaviour.
+SYDNEY_NOW = datetime(2026, 9, 15, 7, 0, tzinfo=SYDNEY)
 
 
 def test_default_realtime_voice_is_marin() -> None:
@@ -176,10 +186,17 @@ async def test_practice_tools_notify_desk_including_booking_failures(
     monkeypatch,
 ) -> None:
     """Desk activity must fire from the tool method for web and SIP."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
     from booking import MemoryBookingProvider
     from call_state import CallState
     from practice import PracticeClient
 
+    # Freeze the Sydney clock. MemoryBookingProvider defaults now_fn to the live
+    # clock, so an unfrozen provider drops the seeded 09:30 slot as "past" once
+    # real Sydney time passes it, and the booking below stops confirming.
+    now = datetime(2026, 9, 15, 9, 0, tzinfo=ZoneInfo("Australia/Sydney"))
     practice = PracticeClient(mode="mock")
     practice.seed_slot(
         slot_id="slot_shellharbour_2026-09-16_0930_dr-mohit-tolani",
@@ -191,8 +208,8 @@ async def test_practice_tools_notify_desk_including_booking_failures(
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     events: list[dict] = []
     ava = AvaReceptionist(
-        state=CallState(branch="shellharbour", today=date(2026, 9, 15)),
-        booking=MemoryBookingProvider(practice),
+        state=CallState(branch="shellharbour", now=now),
+        booking=MemoryBookingProvider(practice, now_fn=lambda: now),
         on_desk_event=events.append,
     )
 
@@ -388,7 +405,7 @@ async def test_verify_dob_fail_speaks_immediately_and_retries_once(
     )
     ava = AvaReceptionist(
         state=CallState(branch="shellharbour", today=date(2026, 9, 15)),
-        booking=MemoryBookingProvider(client),
+        booking=MemoryBookingProvider(client, now_fn=lambda: SYDNEY_NOW),
         filler_player=player,
     )
     ava.state.pms_record = {
@@ -422,7 +439,9 @@ async def test_check_availability_uses_preferred_clinician(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     state = CallState(branch="shellharbour", today=date(2026, 9, 15))
     state.observe_user_text("I'd like Dr Mohit please")
-    ava = AvaReceptionist(state=state, booking=MemoryBookingProvider(practice))
+    ava = AvaReceptionist(
+        state=state, booking=MemoryBookingProvider(practice, now_fn=lambda: SYDNEY_NOW)
+    )
 
     async def _run_only(self, context, factory, **_kwargs):
         return await factory()
@@ -492,7 +511,9 @@ async def test_empty_tool_args_are_rejected(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     ava = AvaReceptionist(
         state=CallState(branch="shellharbour", today=date(2026, 9, 15)),
-        booking=MemoryBookingProvider(PracticeClient(mode="mock")),
+        booking=MemoryBookingProvider(
+            PracticeClient(mode="mock"), now_fn=lambda: SYDNEY_NOW
+        ),
     )
 
     async def _run_only(self, context, factory, **_kwargs):
@@ -516,7 +537,9 @@ async def test_resolve_date_phrase_tool_and_end_call_block(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     ava = AvaReceptionist(
         state=CallState(branch="shellharbour", today=date(2026, 9, 14)),
-        booking=MemoryBookingProvider(PracticeClient(mode="mock")),
+        booking=MemoryBookingProvider(
+            PracticeClient(mode="mock"), now_fn=lambda: SYDNEY_NOW
+        ),
     )
     hit = await ava.resolve_date_phrase(SimpleNamespace(), phrase="next Friday")
     assert hit["ambiguous"] is True
@@ -600,7 +623,9 @@ async def test_transcription_node_plays_recovery_from_bank(
     player = Player()
     ava = AvaReceptionist(
         state=CallState(branch="shellharbour", today=date(2026, 9, 15)),
-        booking=MemoryBookingProvider(PracticeClient(mode="mock")),
+        booking=MemoryBookingProvider(
+            PracticeClient(mode="mock"), now_fn=lambda: SYDNEY_NOW
+        ),
         filler_player=player,
     )
     session = _FakeRealtimeSession()
@@ -633,7 +658,9 @@ async def test_emergency_script_uses_generate_reply_on_realtime(monkeypatch) -> 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     ava = AvaReceptionist(
         state=CallState(branch="shellharbour", today=date(2026, 9, 15)),
-        booking=MemoryBookingProvider(PracticeClient(mode="mock")),
+        booking=MemoryBookingProvider(
+            PracticeClient(mode="mock"), now_fn=lambda: SYDNEY_NOW
+        ),
     )
     session = _FakeRealtimeSession()
     ava._speech_session = session

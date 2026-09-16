@@ -121,7 +121,11 @@ def _seed_client() -> tuple[PracticeClient, MemoryBookingProvider]:
         clinician="Dr Mohit Tolani",
         reason="check-up",
     )
-    return client, MemoryBookingProvider(client)
+    # Generate the demo from the start of the seeded day. On the live clock the
+    # provider drops that day's slots as past whenever the harness runs in the
+    # afternoon, and the transcripts come out with no times offered at all.
+    demo_now = datetime.combine(seed_day, datetime.min.time(), tzinfo=SYDNEY)
+    return client, MemoryBookingProvider(client, now_fn=lambda: demo_now)
 
 
 async def run_all(out_dir: Path = OUT_DIR) -> list[Path]:

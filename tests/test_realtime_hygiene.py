@@ -8,8 +8,10 @@ Docs: https://docs.livekit.io/agents/logic/chat-context/#truncating-a-context
 from __future__ import annotations
 
 import inspect
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from zoneinfo import ZoneInfo
 
 import pytest
 from livekit.agents.llm import ChatContext
@@ -178,17 +180,23 @@ async def test_rate_limit_recovery_uses_retry_after_and_speaks_slots() -> None:
 
     session = SimpleNamespace(generate_reply=AsyncMock())
     state = CallState(branch="shellharbour")
+    # Keep the offered slots ahead of the live clock. RateLimitRecovery speaks
+    # them via spoken_two_slot_offer, which drops past slots, so hard-coded
+    # dates make this test fail once they age out rather than on behaviour.
+    sydney_today = datetime.now(ZoneInfo("Australia/Sydney")).date()
+    first = sydney_today + timedelta(days=7)
+    second = first + timedelta(days=1)
     state.remember_availability(
         {
             "ok": True,
             "slots": [
                 {
-                    "date": "2026-09-22",
+                    "date": first.isoformat(),
                     "time": "10:00",
                     "clinician": "Dr Mohit Tolani",
                 },
                 {
-                    "date": "2026-09-23",
+                    "date": second.isoformat(),
                     "time": "14:30",
                     "clinician": "Dr Mohit Tolani",
                 },

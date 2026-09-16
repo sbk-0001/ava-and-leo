@@ -3,6 +3,7 @@ const state = {
   branches: [],
   diary: { slots: [], bookings: [] },
   room: null,
+  connecting: false,
   deskSource: null,
   seenDeskIds: new Set(),
   groundingViolations: 0,
@@ -372,8 +373,15 @@ function setCallStatus(message, visible = true) {
 }
 
 async function callAva() {
+  // One call at a time. Every /api/token mints a fresh room carrying its own
+  // agent dispatch, so a second click while connecting or connected put two
+  // Avas in two rooms and both of them talked over each other.
+  if (state.connecting || state.room) return;
+  state.connecting = true;
+  $("call-ava").disabled = true;
   setCallStatus("Connecting to Ava…");
   $("call-ava").classList.add("live");
+  let room = null;
   try {
     const token = await api("/api/token", {
       method: "POST",
@@ -381,32 +389,61 @@ async function callAva() {
     });
     const Room = window.LivekitClient.Room;
     const RoomEvent = window.LivekitClient.RoomEvent;
-    const room = new Room();
+    room = new Room();
+    // Claim the slot before connecting so a click landing mid-connect is
+    // refused, and so the handlers below can tell live events from stale ones.
+    state.room = room;
     room.on(RoomEvent.TrackSubscribed, (track) => {
-      if (track.kind === "audio") {
-        $("remote-audio").appendChild(track.attach());
-      }
+      if (track.kind !== "audio" || state.room !== room) return;
+      // Replace, never stack: one audible element at a time.
+      $("remote-audio").innerHTML = "";
+      $("remote-audio").appendChild(track.attach());
     });
-    room.on(RoomEvent.Disconnected, () => hangUp(false));
+    room.on(RoomEvent.Disconnected, () => {
+      if (state.room !== room) return;
+      hangUp(false);
+    });
     subscribeDeskFeed(room);
     await room.connect(token.url, token.token);
     await room.startAudio();
     await room.localParticipant.setMicrophoneEnabled(true);
-    state.room = room;
     $("hang-up").classList.remove("hidden");
     setCallStatus(`Connected to Ava at ${currentBranch().trading_name}. Speak normally.`);
   } catch (error) {
+    // Drop a half-connected room, otherwise its dispatched agent keeps talking
+    // into a room nobody is listening to.
+    if (state.room === room) state.room = null;
+    if (room) {
+      try {
+        await room.disconnect();
+      } catch {
+        // already gone
+      }
+    }
     $("call-ava").classList.remove("live");
+    $("hang-up").classList.add("hidden");
+    $("remote-audio").innerHTML = "";
     setCallStatus(error.message || "Could not connect. Is the agent worker running?");
+  } finally {
+    state.connecting = false;
+    $("call-ava").disabled = Boolean(state.room);
   }
 }
 
 async function hangUp(disconnect = true) {
-  if (disconnect && state.room) {
-    await state.room.disconnect();
-  }
+  // Clear the slot first so the Disconnected handler sees a stale room and does
+  // not re-enter this function.
+  const room = state.room;
   state.room = null;
+  if (disconnect && room) {
+    try {
+      await room.disconnect();
+    } catch {
+      // already gone
+    }
+  }
   $("call-ava").classList.remove("live");
+  $("call-ava").disabled = false;
   $("hang-up").classList.add("hidden");
   $("remote-audio").innerHTML = "";
   setCallStatus("Call ended.", true);

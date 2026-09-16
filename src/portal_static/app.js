@@ -404,6 +404,25 @@ async function acquireMicrophone() {
   }
 }
 
+// The browser can block audio playback even after a click. Say so, and let the
+// next click anywhere start it, rather than sitting silent with a live call.
+function unlockAudio(room, element) {
+  setCallStatus("Tap anywhere to hear Ava.");
+  const start = async () => {
+    try {
+      await room.startAudio();
+      if (element) await element.play();
+      setCallStatus(`Connected to Ava at ${currentBranch().trading_name}. Speak normally.`);
+    } catch {
+      setCallStatus("Your browser is blocking audio. Allow sound for this site, then call again.");
+    }
+    document.removeEventListener("click", start);
+    document.removeEventListener("touchstart", start);
+  };
+  document.addEventListener("click", start, { once: false });
+  document.addEventListener("touchstart", start, { once: false });
+}
+
 async function callAva() {
   // One call at a time. Every /api/token mints a fresh room carrying its own
   // agent dispatch, so a second click while connecting or connected put two
@@ -429,8 +448,21 @@ async function callAva() {
     room.on(RoomEvent.TrackSubscribed, (track) => {
       if (track.kind !== "audio" || state.room !== room) return;
       // Replace, never stack: one audible element at a time.
+      const el = track.attach();
+      el.autoplay = true;
+      el.playsInline = true;
       $("remote-audio").innerHTML = "";
-      $("remote-audio").appendChild(track.attach());
+      $("remote-audio").appendChild(el);
+      // autoplay alone is not enough: the browser can refuse, and then the
+      // transcript keeps scrolling while the caller hears nothing at all.
+      const played = el.play();
+      if (played && typeof played.catch === "function") {
+        played.catch(() => unlockAudio(room, el));
+      }
+    });
+    room.on(RoomEvent.AudioPlaybackStatusChanged, () => {
+      if (state.room !== room) return;
+      if (room.canPlaybackAudio === false) unlockAudio(room, null);
     });
     room.on(RoomEvent.Disconnected, () => {
       if (state.room !== room) return;

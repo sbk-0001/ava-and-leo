@@ -51,7 +51,14 @@ from grounding import (
     grounding_corrective_note,
     grounding_violation_packet,
 )
-from persona import ava_instructions, get_branch, quote_fee, resolve_tool_branch
+from persona import (
+    BRANCHES,
+    GROUP_TRADING_NAME,
+    ava_instructions,
+    get_branch,
+    quote_fee,
+    resolve_tool_branch,
+)
 from phrase_pools import RECOVERY, STAGE_1, STAGE_5
 from realtime_hygiene import maybe_trim_realtime_context
 from sip_utils import find_sip_participant
@@ -1413,25 +1420,34 @@ def inbound_greeting_instructions(
     branch_id: str, *, state: CallState | None = None
 ) -> str:
     branch = get_branch(branch_id)
-    name = branch.trading_name
+    group = GROUP_TRADING_NAME
+    sites = ", ".join(b.suburb for b in BRANCHES.values())
     if state is not None and state.known_caller and state.caller_first_name:
         first = state.caller_first_name
         return (
-            f"Known caller. Sound warm. Answer as {name}. "
+            f"Known caller. Sound warm. Answer as {group}. "
             f"Greet {first} by first name. Do not ask for their number. "
             "You may light-confirm: 'Is this still the best number for ya?' "
+            f"They usually come to {branch.suburb} - assume that unless they "
+            "say otherwise, and do not make them pick a clinic again. "
             "Do not mention existing appointments, dentist, or treatment "
             "until date of birth is verified on this call. "
             "Never confirm or deny that they are a patient. "
             "One warm short sentence, then stop and listen. Do not say G'day."
         )
     return (
-        "Sound warm and human, like a real receptionist picking up — not a script. "
-        f"Answer as {name}. They rang this branch; you already know. "
-        "Never ask which clinic they want. Never greet as a group menu. "
-        "Use one of your opening lines with this branch name, for example: "
-        f'"Morning, {name}, Ava speaking!" '
-        f'or "{name}, this is Ava — how ya going?" '
-        f'or "{name}, Ava — what can I do for ya?" '
-        "One warm short sentence, then stop and listen. Do not say G'day."
+        "Sound warm and human, like a real receptionist picking up - not a script. "
+        f"Answer as {group}, the practice behind all three clinics: {sites}. "
+        "Use one of your opening lines, for example: "
+        f'"Morning, {group}, Ava speaking!" '
+        f'or "{group}, this is Ava - how ya going?" '
+        f'or "{group}, Ava - what can I do for ya?" '
+        "One warm short sentence, then stop and listen. Do not say G'day. "
+        "PLACING THEM: they rang the number for "
+        f"{branch.suburb} ({branch.trading_name}), so start there. "
+        "Do not read out a menu of clinics. If they name a clinic, a suburb, "
+        "somewhere close to them, or a dentist they want, put them at the "
+        "clinic that fits and carry on. Only ask which clinic suits when it is "
+        "genuinely unclear and it matters for booking. "
+        f"The three sites are: {sites}."
     )

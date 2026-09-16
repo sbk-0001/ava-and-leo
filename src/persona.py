@@ -36,6 +36,9 @@ DEFAULT_TELEPHONY_PERSONA = "ava"
 DEFAULT_BRANCH_ID = "shellharbour"
 
 INSTRUCTIONS_PATH = Path(__file__).parent / "instructions" / "ava_receptionist.md"
+# The parent company. Every number answers as this; the three sites sit under it.
+GROUP_TRADING_NAME = "Illawarra Dentists"
+
 GROUP_NOTE = (
     "Same group, close to sixty years in the Illawarra between Woonona and Dapto."
 )

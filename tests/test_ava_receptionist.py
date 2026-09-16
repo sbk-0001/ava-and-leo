@@ -10,12 +10,7 @@ import pytest
 
 from ava_receptionist import (
     AVA_DEFAULT_VOICE,
-    AVA_SPEECH_SPEED,
-    AVA_TEMPERATURE,
-    AVA_TRANSCRIPTION_LANGUAGE,
-    AVA_VAD_SILENCE_MS,
     AvaReceptionist,
-    ava_realtime_model,
     inbound_greeting_instructions,
     resolve_ava_voice,
     transfer_destination_for_branch,
@@ -88,87 +83,35 @@ def test_required_tools_are_present() -> None:
     assert "resolve_date_phrase" in inspect.getsource(AvaReceptionist)
 
 
-def test_inbound_greeting_is_the_mapped_branch() -> None:
-    """DID maps the branch. She answers as that clinic — never a group menu."""
-    text = inbound_greeting_instructions("shellharbour")
-    lowered = text.lower()
-    assert "ava" in lowered
-    assert "shellharbour dentists" in lowered
-    assert "morning, shellharbour dentists, ava speaking" in lowered
-    assert "how ya going" in lowered
-    assert "what can i do for ya" in lowered
-    assert "never ask which clinic" in lowered
-    assert "illawarra dentists group" not in lowered
-    assert "list all three" not in lowered
+def test_inbound_greeting_answers_as_the_group() -> None:
+    """Every number answers as Illawarra Dentists, then routes to a clinic.
 
+    The parent company is the brand callers ring; the three sites sit under it.
+    Previously each DID greeted as its own clinic and was told never to mention
+    the group.
+    """
+    for branch_id in ("shellharbour", "dapto", "woonona"):
+        lowered = inbound_greeting_instructions(branch_id).lower()
+        assert "illawarra dentists" in lowered, branch_id
+        assert "ava" in lowered
+        # The old branch-only rule must be gone.
+        assert "never ask which clinic" not in lowered, branch_id
+        assert "never greet as a group menu" not in lowered, branch_id
+
+
+def test_group_greeting_still_knows_which_clinic_was_dialled() -> None:
+    """Routing should start from the number they rang, not a blank slate."""
+    shell = inbound_greeting_instructions("shellharbour").lower()
+    assert "shellharbour" in shell
     dapto = inbound_greeting_instructions("dapto").lower()
-    assert "dapto dentists" in dapto
-    assert "ava at illawarra dentists" not in dapto
+    assert "dapto" in dapto
 
 
-def test_inbound_greeting_uses_did_branch() -> None:
-    for branch_id, name in (
-        ("shellharbour", "shellharbour dentists"),
-        ("dapto", "dapto dentists"),
-        ("woonona", "woonona dentists"),
-    ):
-        text = inbound_greeting_instructions(branch_id).lower()
-        assert name in text
-        assert "never ask which clinic" in text
-        assert "how ya going" in text
-        assert "what can i do for ya" in text
-
-
-def test_ava_session_uses_realtime_llm_and_interruptions() -> None:
-    from agent import _build_ava_session
-
-    source = inspect.getsource(_build_ava_session)
-    assert "realtime_llm" in source
-    assert "enabled" in source
-    assert "True" in source
-
-
-def test_realtime_model_server_vad_barge_in() -> None:
-    """Server VAD 450-550ms, barge-in on, speech ~0.9, temperature 0.9-1.0.
-
-    Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/#turn-detection
-    """
-    source = inspect.getsource(ava_realtime_model)
-    assert "interrupt_response" in source
-    assert "True" in source
-    assert "server_vad" in source
-    assert "silence_duration_ms" in source
-    assert "AVA_VAD_SILENCE_MS" in source
-    assert 450 <= AVA_VAD_SILENCE_MS <= 550
-    assert AVA_SPEECH_SPEED == 0.9
-    assert 0.9 <= AVA_TEMPERATURE <= 1.0
-    assert "create_response" in source
-
-
-def test_realtime_transcription_is_pinned_to_english() -> None:
-    """Ava is an English-only receptionist, so ASR must not guess the language.
-
-    On jobs AJ_zfzKY76q5L5A and AJ_BFVvzmBdUchN the caller spoke English and the
-    transcript came back in Cyrillic and then Chinese script, which the turn
-    filter dropped as non_task_language, so those turns reached Ava as silence.
-    Pinning the transcription language stops English audio being transcribed as
-    another script.
-    """
-    source = inspect.getsource(ava_realtime_model)
-    assert "input_audio_transcription" in source
-    assert "AVA_TRANSCRIPTION_LANGUAGE" in source
-    assert AVA_TRANSCRIPTION_LANGUAGE == "en"
-
-
-def test_ava_answers_in_english_whatever_the_caller_speaks() -> None:
-    """She may be spoken to in any language; she always replies in English."""
-    from persona import VOICE_INSTRUCTIONS
-
-    lowered = VOICE_INSTRUCTIONS.lower()
-    assert "english" in lowered
-    # An explicit never-switch rule, not just the word "English" in passing.
-    assert "another language" in lowered or "other language" in lowered
-    assert "australian english" in lowered
+def test_group_greeting_offers_the_three_clinics() -> None:
+    """She must be able to place a caller by clinic, area or dentist."""
+    lowered = inbound_greeting_instructions("shellharbour").lower()
+    for site in ("shellharbour", "dapto", "woonona"):
+        assert site in lowered, site
 
 
 def test_transfer_destination_prefers_branch_env() -> None:

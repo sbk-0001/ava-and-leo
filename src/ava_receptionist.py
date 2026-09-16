@@ -390,6 +390,25 @@ class AvaReceptionist(Agent):
         except Exception:
             logger.exception("caller store name upsert failed")
 
+    def _persist_caller_dob(self) -> None:
+        """Keep a verified date of birth against the number, not just the call.
+
+        Without this it lived only in the practice record for the call, so the
+        same caller was asked again on their next one.
+        """
+        key = self.state.ani or self.state.caller_mobile
+        dob = getattr(self.state, "verified_dob", None)
+        if not key or not dob:
+            return
+        try:
+            self.caller_store.touch(
+                key,
+                date_of_birth=str(dob),
+                preferred_branch=self.state.branch,
+            )
+        except Exception:
+            logger.exception("caller store dob upsert failed")
+
     def _kick_locked_speech(self, context: RunContext, facts: str) -> None:
         """Start Realtime confirmation. Duck fillers; do not play another clip."""
         notify = getattr(self.filler_player, "notify_model_audio", None)
@@ -1210,6 +1229,7 @@ class AvaReceptionist(Agent):
         result = self.state.verify_dob(date_of_birth)
         if result.get("ok"):
             self._persist_collected_dob(result)
+            self._persist_caller_dob()
         else:
             pool = "recovery" if result.get("retry_allowed") else "stage_5"
             lines = RECOVERY if result.get("retry_allowed") else STAGE_5

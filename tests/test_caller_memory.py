@@ -242,3 +242,35 @@ def test_successful_booking_writes_caller_store() -> None:
     assert record.name == "Sam Lee"
     assert record.booking_history
     assert record.booking_history[-1]["booking_id"] == "bkg_786135d6d9"
+
+
+def test_caller_store_remembers_date_of_birth_across_calls(tmp_path) -> None:
+    """Robert gave his DOB on 16 Sep and it was forgotten the moment he hung up.
+
+    The store kept his name, branch and bookings but had no date_of_birth field
+    at all, so the next call could not identify him and asked all over again.
+    """
+    from caller_store import CallerStore
+
+    store = CallerStore(path=tmp_path / "callers.json")
+    store.touch("+61474470332", name="Robert", date_of_birth="1980-08-01")
+
+    reloaded = CallerStore(path=tmp_path / "callers.json")
+    reloaded.load()
+    record = reloaded.lookup("+61474470332")
+    assert record is not None
+    assert record.name == "Robert"
+    assert record.date_of_birth == "1980-08-01"
+
+
+def test_remembered_dob_is_applied_to_call_state(tmp_path) -> None:
+    """A returning caller should not be asked for a date of birth twice."""
+    from call_state import CallState
+    from caller_store import CallerStore, apply_record_to_state
+
+    store = CallerStore(path=tmp_path / "callers.json")
+    store.touch("+61474470332", name="Robert", date_of_birth="1980-08-01")
+
+    state = CallState(branch="shellharbour")
+    apply_record_to_state(state, store.lookup("+61474470332"))
+    assert state.verify_dob("1980-08-01")["ok"] is True

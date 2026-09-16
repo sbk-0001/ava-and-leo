@@ -64,6 +64,7 @@ def parse_iso(raw: str | None) -> datetime | None:
 class CallerRecord:
     e164: str
     name: str | None = None
+    date_of_birth: str | None = None
     preferred_branch: str | None = None
     dentist_preference: str | None = None
     booking_history: list[dict[str, Any]] = field(default_factory=list)
@@ -100,6 +101,7 @@ class CallerStore:
             record = CallerRecord(
                 e164=str(item["e164"]),
                 name=item.get("name"),
+                date_of_birth=item.get("date_of_birth"),
                 preferred_branch=item.get("preferred_branch"),
                 dentist_preference=item.get("dentist_preference"),
                 booking_history=list(item.get("booking_history") or []),
@@ -126,6 +128,7 @@ class CallerStore:
         e164: str,
         *,
         name: str | None = None,
+        date_of_birth: str | None = None,
         preferred_branch: str | None = None,
         dentist_preference: str | None = None,
         booking: Mapping[str, Any] | None = None,
@@ -135,6 +138,8 @@ class CallerStore:
         record = self.records.get(key) or CallerRecord(e164=key, mobile=key)
         if name:
             record.name = name
+        if date_of_birth:
+            record.date_of_birth = date_of_birth
         if preferred_branch:
             record.preferred_branch = preferred_branch
         if dentist_preference:
@@ -239,6 +244,17 @@ def apply_record_to_state(state: Any, record: CallerRecord) -> None:
     if record.preferred_branch and not getattr(state, "preferred_branch", None):
         state.preferred_branch = record.preferred_branch
     state.usual_dentist = record.dentist_preference
+    if record.date_of_birth:
+        # Seed the record we verify against, so a caller who already gave us a
+        # date of birth is not asked for it on every future call.
+        existing = state.pms_record if isinstance(state.pms_record, dict) else {}
+        patients = list(existing.get("patients") or [])
+        if not patients:
+            patients = [{"name": record.name, "date_of_birth": record.date_of_birth}]
+        elif isinstance(patients[0], dict) and not patients[0].get("date_of_birth"):
+            patients[0]["date_of_birth"] = record.date_of_birth
+        existing["patients"] = patients
+        state.pms_record = existing
     last = record.booking_history[-1] if record.booking_history else None
     if last:
         state.last_appointment_private = last

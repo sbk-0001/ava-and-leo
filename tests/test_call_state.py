@@ -215,3 +215,35 @@ def test_may_offer_times_only_after_availability_slots() -> None:
     assert state.may_offer_times() is True
     assert "10:10" in state.prompt_block()
     assert "Dr Mohit Tolani" in state.prompt_block()
+
+
+def test_first_dob_is_captured_when_nothing_is_on_file() -> None:
+    """Regression for job AJ_ReCp3sfEyuWx (Robert, 16 Sep).
+
+    He booked by name only, then asked to reschedule in the same call. Ava
+    asked him to "confirm" a date of birth that had never been taken, so
+    verify_dob compared against an empty record and failed every time. Three
+    attempts, then she gave up and took a message. There was nothing to verify
+    against, so the first date given must be captured, not rejected.
+    """
+    state = CallState(branch="shellharbour")
+    result = state.verify_dob("1980-08-01")
+    assert result["ok"] is True, result
+    assert state.dob_verified is True
+    assert state.verified_dob == "1980-08-01"
+
+
+def test_a_wrong_dob_still_fails_when_one_is_on_file() -> None:
+    """Capturing a first DOB must not weaken checks on a real record."""
+    state = CallState(branch="shellharbour")
+    state.pms_record = {
+        "patients": [{"name": "Robert", "date_of_birth": "1980-08-01"}],
+        "is_existing_patient": True,
+    }
+    bad = state.verify_dob("1999-01-01")
+    assert bad["ok"] is False
+    assert state.dob_verified is False
+
+    good = state.verify_dob("1980-08-01")
+    assert good["ok"] is True
+    assert state.dob_verified is True

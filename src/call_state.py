@@ -730,8 +730,13 @@ class CallState:
         expected_iso = normalize_dob(expected)
         if given_iso and expected_iso and given_iso == expected_iso:
             return self._mark_dob_verified(given_iso, patient=patient, record=record)
-        if given_iso and patient is not None and not expected_iso:
-            patient["date_of_birth"] = given_iso
+        if given_iso and not expected_iso:
+            # Nothing on file to check against, so there is nothing to fail. This
+            # is the caller telling us their date of birth for the first time -
+            # take it and remember it. Rejecting it asked them to "confirm" a
+            # date we had never been given, which could never match.
+            if patient is not None:
+                patient["date_of_birth"] = given_iso
             return self._mark_dob_verified(given_iso, patient=patient, record=record)
         self.dob_attempts += 1
         self.dob_verified = False

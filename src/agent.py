@@ -27,7 +27,7 @@ from livekit.agents.llm import ChatMessage
 from livekit.plugins import assemblyai, cartesia, groq
 
 from ambient import AmbientBed
-from ava_receptionist import AvaReceptionist
+from ava_receptionist import AvaReceptionist, attach_tool_reply_guard
 from availability_cache import CachedBookingProvider
 from backchannel import attach_backchannels
 from booking import apply_job_booking_overrides, get_shared_booking_provider
@@ -693,6 +693,8 @@ async def my_agent(ctx: JobContext):
         session = _build_ava_session()
         session._filler_player = filler_player  # type: ignore[attr-defined]
         filler_player.session = session
+        # Code speaks the booking confirmation; stop the model saying it again.
+        attach_tool_reply_guard(session, agent)
 
         def _on_speech_created(*_args: Any, **_kwargs: Any) -> None:
             filler_player.notify_model_audio()
@@ -785,6 +787,7 @@ async def my_agent(ctx: JobContext):
         call_log.add_turn(role=item.role, content=text, timestamp=stamp)
         if item.role == "assistant":
             rate_limit.reset()
+            call_state.observe_assistant_text(text)
 
     async def on_shutdown() -> None:
         if cache_stop is not None:

@@ -33,6 +33,9 @@ FILLER_ONLY_RE = re.compile(
     r"ok(?:ay)?|iya|hmm+|huh|mm+|mhm+|huh\??)\s*[.!?]*$",
     re.I,
 )
+# A bare yes/no is backchannel while a tool runs, but an answer otherwise:
+# "Yep." to "is that right?" was dropped on 17 Sep.
+ANSWER_WORD_RE = re.compile(r"^(?:yeah|yep|yup|nah|ok(?:ay)?)\s*[.!?]*$", re.I)
 NAME_CORRECTION_RE = re.compile(
     r"(?i)\b(?:my name(?:'?s| is)|(?:it'?s|this is) actually|"
     r"the name is|name is|call me|i(?:'?m| am))\s+"
@@ -158,6 +161,8 @@ def classify_user_turn(
     if task:
         return TurnVerdict(False, "task", barge=barge, task=True)
     if FILLER_ONLY_RE.match(raw):
+        if ANSWER_WORD_RE.match(raw) and not tool_in_flight:
+            return TurnVerdict(False, "short_answer", barge=False, task=False)
         return TurnVerdict(True, "filler_only", barge=False, task=False)
     if _echoes_filler(raw, recent_fillers):
         return TurnVerdict(True, "filler_echo")

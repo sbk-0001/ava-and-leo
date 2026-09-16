@@ -292,14 +292,19 @@ def slot_start_sydney(slot: Mapping[str, Any]) -> datetime | None:
         return None
 
 
+MIN_LEAD = timedelta(minutes=30)
+
+
 def filter_past_slots(
     slots: list[dict[str, Any]],
     *,
     now: datetime | None = None,
+    lead: timedelta = MIN_LEAD,
 ) -> list[dict[str, Any]]:
-    """Drop slots whose start is not strictly after now (Sydney).
+    """Drop slots that start before now + lead (Sydney).
 
-    Never offer 8:00 / 9:30 'today' when the clock is already arvo/evening.
+    Never offer 8:00 / 9:30 'today' when the clock is already arvo/evening, and
+    never a time the caller cannot reach: at 8:11 she offered 8:30.
     """
     current = now or datetime.now(SYDNEY)
     if current.tzinfo is None:
@@ -309,7 +314,7 @@ def filter_past_slots(
     kept: list[dict[str, Any]] = []
     for slot in slots:
         start = slot_start_sydney(slot)
-        if start is None or start > current:
+        if start is None or start >= current + lead:
             kept.append(slot)
     return kept
 

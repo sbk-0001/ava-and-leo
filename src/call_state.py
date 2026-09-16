@@ -214,6 +214,48 @@ def is_valid_au_mobile(value: str | None) -> bool:
     return bool(_MOBILE_RE.match(digits if digits.startswith("0") else "0" + digits))
 
 
+_HESITATION_RE = re.compile(
+    r"^(?:(?:well|um+|u+h+|h?m+|hmm+|er+|a+h+|so|look|maybe|"
+    r"i'?m not sure|not sure|let me think|hang on|hold on|wait|"
+    r"i don'?t know|dunno)[\s,.!?…-]*)+$",
+    re.I,
+)
+_ACCEPT_RE = re.compile(
+    r"\b(?:yes|yeah|yep|yup|sure|ok(?:ay)?|perfect|great|lovely|"
+    r"sounds good|that works|that'?s fine|fine|suits|book it|lock it in|"
+    r"go ahead|that'?ll do)\b",
+    re.I,
+)
+_DECLINE_RE = re.compile(r"\b(?:no|nah|not really|doesn'?t suit|can'?t)\b", re.I)
+_OFFER_TIME_RE = re.compile(
+    r"\b(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}\s*o'?clock|half past|quarter)\b",
+    re.I,
+)
+_TIME_QUESTION_RE = re.compile(
+    r"\b(?:suit|sound|work|how'?s that|would you like|want it|that okay|ok\?)",
+    re.I,
+)
+
+
+def is_hesitation(text: str | None) -> bool:
+    """ "Well...", "um", "let me think" - not a yes, not a no."""
+    return bool(_HESITATION_RE.match((text or "").strip()))
+
+
+def is_acceptance(text: str | None) -> bool:
+    raw = (text or "").strip()
+    return bool(raw) and bool(_ACCEPT_RE.search(raw)) and not _DECLINE_RE.search(raw)
+
+
+def is_time_offer_question(text: str | None) -> bool:
+    raw = (text or "").strip()
+    return (
+        "?" in raw
+        and bool(_OFFER_TIME_RE.search(raw))
+        and bool(_TIME_QUESTION_RE.search(raw))
+    )
+
+
 def normalize_au_mobile(value: str | None) -> str:
     digits = re.sub(r"\D", "", value or "")
     if digits.startswith("61") and len(digits) == 11:
@@ -414,6 +456,11 @@ class CallState:
     goal_kind: str | None = None
     junk_turns: int = 0
     book_confirm_kicked_at: float | None = None
+    # Robert said "Well..." to "10:00 with Dr Tolani - how does that sound?"
+    # and was booked anyway. Tracked from what was actually said.
+    awaiting_slot_answer: bool = False
+    slot_hesitated: bool = False
+    booking_confirmed_aloud: bool = False
 
     def __post_init__(self) -> None:
         if self.caller_mobile and is_valid_au_mobile(self.caller_mobile):
@@ -999,10 +1046,35 @@ class CallState:
         self.barge_in_pending = False
         return self.last_barge_in_resume
 
+    def observe_assistant_text(self, text: str) -> None:
+        """Ava's finished utterance: did she just ask whether a time suits?"""
+        if is_time_offer_question(text):
+            self.awaiting_slot_answer = True
+        elif text and "?" in text:
+            # She asked something else (name, mobile): a yes now answers that.
+            self.awaiting_slot_answer = False
+
+    def observe_offer_reply(self, text: str) -> None:
+        """How the caller answered a time offer. Runs even for short turns."""
+        if not self.awaiting_slot_answer or not text:
+            return
+        if is_hesitation(text):
+            self.slot_hesitated = True
+            return
+        if is_acceptance(text):
+            self.slot_hesitated = False
+        self.awaiting_slot_answer = False
+
+    def note_booking_confirmed_aloud(self) -> None:
+        self.booking_confirmed_aloud = True
+        self.slot_hesitated = False
+        self.awaiting_slot_answer = False
+
     def observe_user_text(self, text: str) -> None:
         """Code-side flow: suburb offers, urgency, bot asks. Never a branch menu."""
         if not text:
             return
+        self.observe_offer_reply(text)
         corrected = extract_name_correction(text)
         if corrected:
             self.correct_caller_name(corrected)
@@ -1119,6 +1191,7 @@ class CallState:
             f"- last_book_confirmed: {bool((self.last_book_result or {}).get('confirmed'))}\n"
             f"- last_book_reason: {(self.last_book_result or {}).get('reason') or 'none'}\n"
             f"- booking_locked: {self.may_confirm_booking()}\n"
+            f"{self._offer_answer_line()}"
             f"- booking_phase: {self.booking_flow.phase.value}\n"
             f"- session_slot_ids: {len(self.booking_flow.session_slot_ids)}\n"
             f"- grounding_violations: {self.grounding_violations}\n"
@@ -1167,6 +1240,21 @@ class CallState:
             "- Use the Sydney today/tomorrow/clock lines above. Do not guess "
             "the weekday or the time of day."
         )
+
+    def _offer_answer_line(self) -> str:
+        lines = ""
+        if self.slot_hesitated:
+            lines += (
+                "- the caller hesitated at the time you offered and did not say yes. "
+                "Ask plainly whether that time suits, or offer another. Do not book "
+                "until they say yes.\n"
+            )
+        if self.booking_confirmed_aloud:
+            lines += (
+                "- you already told them the booking. Do not repeat the booking "
+                "details again unless they ask; answer what they ask and wrap up.\n"
+            )
+        return lines
 
     def _offer_summary(self) -> str:
         if not self.last_availability_slots:

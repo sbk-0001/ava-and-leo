@@ -133,6 +133,37 @@ def book_confirm_facts(name: str, result: Mapping[str, Any]) -> str:
     )
 
 
+def attach_tool_reply_guard(session: Any, agent: Any) -> None:
+    """Route function_tools_executed to the agent's one-shot reply guard."""
+    handler = getattr(agent, "on_tools_executed", None)
+    on = getattr(session, "on", None)
+    if handler is None or not callable(on):
+        return
+    on("function_tools_executed", handler)
+
+
+def time_check_say(slot_id: str, offered: list[Mapping[str, Any]] | None) -> str:
+    """Ask before booking, e.g. does 10 o'clock with Dr Tolani suit you?"""
+    match = next((s for s in (offered or []) if str(s.get("slot_id")) == slot_id), None)
+    hhmm = str((match or {}).get("time") or "")
+    if not hhmm:
+        parts = slot_id.split("_")
+        if len(parts) > 3 and len(parts[3]) == 4:
+            hhmm = f"{parts[3][:2]}:{parts[3][2:]}"
+    when = "that time"
+    if hhmm:
+        hour, minute = int(hhmm[:2]), int(hhmm[3:5])
+        twelve = hour % 12 or 12
+        when = f"{twelve} o'clock" if minute == 0 else f"{twelve}:{minute:02d}"
+    dentist = str((match or {}).get("clinician") or "").strip()
+    who = (
+        f" with {dentist}"
+        if dentist and dentist.lower() not in PLACEHOLDER_CLINICIANS
+        else ""
+    )
+    return f"Before I lock it in - does {when}{who} suit you?"
+
+
 def confirmation_text_line(result: Mapping[str, Any]) -> str:
     if result.get("confirmation_text") == "queued":
         return (
@@ -245,6 +276,7 @@ class AvaReceptionist(Agent):
             sms_sender_from_env() if sms is True else (sms or None)
         )
         self._text_tasks: set[asyncio.Task[Any]] = set()
+        self._spoken_tool_results: set[str] = set()
         self.booking = booking
         self.transfer_to = transfer_to
         self.call_log = call_log
@@ -469,18 +501,44 @@ class AvaReceptionist(Agent):
         except Exception:
             logger.exception("caller store dob upsert failed")
 
-    def _kick_locked_speech(self, context: RunContext, facts: str) -> None:
-        """Start Realtime confirmation. Duck fillers; do not play another clip."""
+    def _kick_locked_speech(
+        self, context: RunContext, facts: str, *, tool: str | None = None
+    ) -> bool:
+        """Start Realtime confirmation. Duck fillers; do not play another clip.
+
+        The SDK also asks the model to reply to the tool result, which made her
+        confirm twice (17 Sep). The kicked tool is remembered so the guard in
+        attach_tool_reply_guard can cancel that second reply.
+        """
         notify = getattr(self.filler_player, "notify_model_audio", None)
         if callable(notify):
             notify()
         session = getattr(context, "session", None)
         if session is None:
-            return
+            return False
         try:
             kick_scripted_speech(session, facts, kind="script")
         except Exception:
             logger.exception("locked-result speech kick failed")
+            return False
+        if tool:
+            self._spoken_tool_results.add(tool)
+        self.state.note_booking_confirmed_aloud()
+        return True
+
+    def on_tools_executed(self, ev: Any) -> None:
+        """Cancel the model's own reply when code already spoke the result."""
+        names = [
+            str(getattr(call, "name", "") or "")
+            for call in (getattr(ev, "function_calls", None) or [])
+        ]
+        if not names or not all(name in self._spoken_tool_results for name in names):
+            return
+        cancel = getattr(ev, "cancel_tool_reply", None)
+        if callable(cancel):
+            cancel()
+        for name in names:
+            self._spoken_tool_results.discard(name)
 
     def _queue_confirmation_text(self, kind: str, result: dict[str, Any]) -> None:
         """Text the caller about a locked booking, without holding up the call.
@@ -538,7 +596,7 @@ class AvaReceptionist(Agent):
         name = self.state.caller_name or "the caller"
         facts = book_confirm_facts(name, result)
         self.state.book_confirm_kicked_at = time.perf_counter()
-        self._kick_locked_speech(context, facts)
+        self._kick_locked_speech(context, facts, tool="book_appointment")
 
     def _kick_cancel_confirm(
         self, context: RunContext, result: Mapping[str, Any]
@@ -550,7 +608,7 @@ class AvaReceptionist(Agent):
             f"Confirm that once. {confirmation_text_line(result)} "
             "Do not go quiet. Do not invent another booking."
         )
-        self._kick_locked_speech(context, facts)
+        self._kick_locked_speech(context, facts, tool="cancel_appointment")
 
     async def _collect_open_bookings(self) -> list[dict[str, Any]]:
         seen: dict[str, dict[str, Any]] = {}
@@ -746,6 +804,7 @@ class AvaReceptionist(Agent):
             recent_fillers=recent,
         )
         if verdict.ignore:
+            self.state.observe_offer_reply(text)
             self.state.junk_turns += 1
             logger.info(
                 "ignored junk turn reason=%s text=%r goal=%s",
@@ -1137,6 +1196,18 @@ class AvaReceptionist(Agent):
                         "appointment: book_appointment with second_appointment=true."
                     ),
                 }
+            if self.state.slot_hesitated:
+                say = time_check_say(slot_id, self.state.last_availability_slots)
+                return {
+                    "ok": False,
+                    "confirmed": False,
+                    "reason": "time_not_agreed",
+                    "say": say,
+                    "note": (
+                        "The caller hesitated at this time and never said yes. Ask "
+                        "exactly `say`, wait for a yes, then book. Do not say booked."
+                    ),
+                }
             if name:
                 self.state.correct_caller_name(name)
                 self._persist_caller_name()
@@ -1182,7 +1253,11 @@ class AvaReceptionist(Agent):
         raw = await self._dispatch_with_ladder(
             context, _run, in_flight="book_appointment"
         )
-        if raw.get("reason") in {"mobile_unconfirmed", "already_booked"}:
+        if raw.get("reason") in {
+            "mobile_unconfirmed",
+            "already_booked",
+            "time_not_agreed",
+        }:
             # Not a booking outcome; do not push the booking flow into failure.
             result = dict(raw)
         else:

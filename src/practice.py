@@ -10,6 +10,7 @@ portal and the voice agent can share the same diary.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -23,6 +24,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from persona import BRANCHES, VERIFY
+from state_store import DIARY_KEY, state_store_from_env
 
 PracticeMode = Literal["disconnected", "mock"]
 SYDNEY = ZoneInfo("Australia/Sydney")
@@ -119,6 +121,13 @@ class PracticeClient:
     slots: dict[str, Slot] = field(default_factory=dict)
     bookings: dict[str, Booking] = field(default_factory=dict)
     messages: list[Message] = field(default_factory=list)
+    # Shared store (Postgres) when the portal and the worker run in the cloud.
+    # None means the old behaviour: this process owns the diary, optionally
+    # mirrored to persist_path.
+    store: Any | None = field(default=None, repr=False, compare=False)
+    store_key: str = DIARY_KEY
+    store_version: int = 0
+    _pending: set[Any] = field(default_factory=set, repr=False, compare=False)
 
     def _unavailable(self, action: str) -> dict[str, Any]:
         return {
@@ -199,6 +208,7 @@ class PracticeClient:
     ) -> dict[str, Any]:
         if self.mode == "disconnected":
             return self._unavailable("find_patient")
+        await self.refresh()
 
         name_n = _norm_text(name)
         phone_n = _norm_phone(phone or "")
@@ -230,6 +240,7 @@ class PracticeClient:
     ) -> dict[str, Any]:
         if self.mode == "disconnected":
             return self._unavailable("get_availability")
+        await self.refresh()
 
         slots = [
             {
@@ -258,6 +269,7 @@ class PracticeClient:
     ) -> dict[str, Any]:
         if self.mode == "disconnected":
             return self._unavailable("list_diary")
+        await self.refresh()
 
         slots = []
         for slot in self.slots.values():
@@ -325,6 +337,7 @@ class PracticeClient:
     ) -> dict[str, Any]:
         if self.mode == "disconnected":
             return self._unavailable("book_appointment")
+        await self.refresh()
 
         slot = self.slots.get(slot_id)
         if slot is None or slot.taken or slot.branch_id != branch_id:
@@ -368,7 +381,7 @@ class PracticeClient:
             reason=reason,
         )
         self.bookings[booking_id] = booking
-        self.save()
+        await self.persist()
         return {
             "ok": True,
             "confirmed": True,
@@ -388,6 +401,7 @@ class PracticeClient:
     ) -> dict[str, Any]:
         if self.mode == "disconnected":
             return self._unavailable("reschedule_appointment")
+        await self.refresh()
 
         booking = self.bookings.get(booking_id)
         new_slot = self.slots.get(new_slot_id)
@@ -409,7 +423,7 @@ class PracticeClient:
         booking.time = new_slot.time
         booking.clinician = new_slot.clinician
         booking.branch_id = new_slot.branch_id
-        self.save()
+        await self.persist()
         return {
             "ok": True,
             "confirmed": True,
@@ -423,6 +437,7 @@ class PracticeClient:
     async def cancel_appointment(self, *, booking_id: str) -> dict[str, Any]:
         if self.mode == "disconnected":
             return self._unavailable("cancel_appointment")
+        await self.refresh()
 
         booking = self.bookings.get(booking_id)
         if booking is None or booking.cancelled:
@@ -432,7 +447,7 @@ class PracticeClient:
         slot = self.slots.get(booking.slot_id)
         if slot is not None:
             slot.taken = False
-        self.save()
+        await self.persist()
         return {
             "ok": True,
             "confirmed": True,
@@ -448,6 +463,7 @@ class PracticeClient:
         body: str,
     ) -> dict[str, Any]:
         # Ava can take a message even when the diary is disconnected.
+        await self.refresh()
         message = Message(
             message_id=f"msg_{uuid.uuid4().hex[:10]}",
             branch_id=branch_id,
@@ -456,7 +472,7 @@ class PracticeClient:
             body=body,
         )
         self.messages.append(message)
-        self.save()
+        await self.persist()
         return {
             "ok": True,
             "confirmed": True,
@@ -464,26 +480,15 @@ class PracticeClient:
             "branch_id": branch_id,
         }
 
-    def save(self) -> None:
-        if self.persist_path is None:
-            return
-        path = Path(self.persist_path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
+    def _payload(self) -> dict[str, Any]:
+        return {
             "patients": {key: asdict(value) for key, value in self.patients.items()},
             "slots": {key: asdict(value) for key, value in self.slots.items()},
             "bookings": {key: asdict(value) for key, value in self.bookings.items()},
             "messages": [asdict(item) for item in self.messages],
         }
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
-    def load(self) -> None:
-        if self.persist_path is None:
-            return
-        path = Path(self.persist_path)
-        if not path.exists():
-            return
-        payload = json.loads(path.read_text(encoding="utf-8"))
+    def _apply_payload(self, payload: Mapping[str, Any]) -> None:
         self.patients = {
             key: Patient(**value) for key, value in payload.get("patients", {}).items()
         }
@@ -494,6 +499,74 @@ class PracticeClient:
             key: Booking(**value) for key, value in payload.get("bookings", {}).items()
         }
         self.messages = [Message(**item) for item in payload.get("messages", [])]
+
+    def save(self) -> None:
+        """Persist after a synchronous mutation: to the file now, or to the
+        shared store in the background (await ``flush()`` to be sure)."""
+        if self.store is not None:
+            self._schedule_persist()
+            return
+        if self.persist_path is None:
+            return
+        path = Path(self.persist_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self._payload(), indent=2), encoding="utf-8")
+
+    def load(self) -> None:
+        if self.persist_path is None:
+            return
+        self.load_file(Path(self.persist_path))
+
+    def load_file(self, path: Path) -> None:
+        path = Path(path)
+        if not path.exists():
+            return
+        self._apply_payload(json.loads(path.read_text(encoding="utf-8")))
+
+    async def persist(self) -> None:
+        """Write the diary where the other process can see it, and wait for it."""
+        if self.store is None:
+            self.save()
+            return
+        self.store_version = await self.store.save(self.store_key, self._payload())
+
+    def _schedule_persist(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self.persist())
+            return
+        task = loop.create_task(self.persist())
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+
+    async def flush(self) -> None:
+        """Wait for background saves scheduled by synchronous mutations."""
+        if self._pending:
+            await asyncio.gather(*list(self._pending), return_exceptions=True)
+
+    async def refresh(self) -> None:
+        """Pick up whatever the other process saved since we last looked.
+
+        An empty store is seeded once (mock mode) or filled from the local file
+        this client was loaded from, so the first cloud boot migrates the
+        laptop's diary instead of starting blank.
+        """
+        if self.store is None:
+            return
+        await self.flush()
+        snapshot = await self.store.load(self.store_key)
+        if not snapshot.exists:
+            if self.mode == "mock" and not self.slots:
+                seed_mock_diary(self)
+            backfill_demo_patient_dobs(self)
+            await self.persist()
+            return
+        if snapshot.version == self.store_version:
+            return
+        self._apply_payload(snapshot.payload or {})
+        backfill_demo_patient_dobs(self)
+        self.store_version = snapshot.version
 
     def update_patient_mobile(
         self,
@@ -668,6 +741,14 @@ def practice_from_env(
     if persist and mode == "mock":
         raw_path = str(environ.get("MOCK_DIARY_PATH", "")).strip()
         path = Path(raw_path) if raw_path else DEFAULT_MOCK_PATH
+    store = state_store_from_env(environ) if mode == "mock" else None
+    if store is not None:
+        # Cloud: the diary lives in the shared database and is read on demand.
+        # A local file, if present, is loaded once so refresh() can migrate it.
+        client = PracticeClient(mode=mode, store=store)
+        if path is not None:
+            client.load_file(path)
+        return client
     client = PracticeClient(mode=mode, persist_path=path)
     if mode == "mock":
         client.load()

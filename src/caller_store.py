@@ -9,6 +9,7 @@ See docs/privacy-caller-store.md.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from sip_utils import normalize_au_phone
+from state_store import CALLER_STORE_KEY, state_store_from_env
 
 logger = logging.getLogger("ava.caller_store")
 
@@ -78,21 +80,39 @@ class CallerRecord:
 class CallerStore:
     """JSON-backed store. Tests may use an in-memory path or this class directly."""
 
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(
+        self,
+        path: Path | None = None,
+        *,
+        store: Any | None = None,
+        store_key: str = CALLER_STORE_KEY,
+    ) -> None:
         self.path = path
+        self.store = store
+        self.store_key = store_key
+        self.store_version = 0
+        self._pending: set[Any] = set()
         self.records: dict[str, CallerRecord] = {}
         if path is not None:
             self.load()
 
     def load(self) -> None:
-        if self.path is None or not self.path.is_file():
+        if self.path is None:
+            return
+        self.load_file(self.path)
+
+    def load_file(self, path: Path) -> None:
+        path = Path(path)
+        if not path.is_file():
             return
         try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
+            raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             logger.exception("caller store load failed")
             return
-        items = raw.get("records") if isinstance(raw, dict) else raw
+        self._apply_items(raw.get("records") if isinstance(raw, dict) else raw)
+
+    def _apply_items(self, items: Any) -> None:
         if not isinstance(items, list):
             return
         for item in items:
@@ -110,12 +130,56 @@ class CallerStore:
             )
             self.records[record.e164] = record
 
+    def _payload(self) -> dict[str, Any]:
+        return {"records": [asdict(record) for record in self.records.values()]}
+
     def save(self) -> None:
+        """After a synchronous change: file now, or shared store in the background."""
+        if self.store is not None:
+            self._schedule_persist()
+            return
         if self.path is None:
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"records": [asdict(record) for record in self.records.values()]}
-        self.path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        self.path.write_text(
+            json.dumps(self._payload(), indent=2) + "\n", encoding="utf-8"
+        )
+
+    async def persist(self) -> None:
+        if self.store is None:
+            self.save()
+            return
+        self.store_version = await self.store.save(self.store_key, self._payload())
+
+    def _schedule_persist(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self.persist())
+            return
+        task = loop.create_task(self.persist())
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+
+    async def flush(self) -> None:
+        if self._pending:
+            await asyncio.gather(*list(self._pending), return_exceptions=True)
+
+    async def refresh(self) -> None:
+        """Load what other calls (on any worker) remembered since we last looked."""
+        if self.store is None:
+            return
+        await self.flush()
+        snapshot = await self.store.load(self.store_key)
+        if not snapshot.exists:
+            if self.records:
+                await self.persist()  # first boot: migrate the local file
+            return
+        if snapshot.version == self.store_version:
+            return
+        self.records = {}
+        self._apply_items((snapshot.payload or {}).get("records"))
+        self.store_version = snapshot.version
 
     def lookup(self, e164: str | None) -> CallerRecord | None:
         key = to_e164(e164)
@@ -211,6 +275,12 @@ def caller_store_from_env(env: Mapping[str, str] | None = None) -> CallerStore:
     environ = env if env is not None else os.environ
     raw = str(environ.get("CALLER_STORE_PATH") or "").strip()
     path = Path(raw) if raw else DEFAULT_PATH
+    store = state_store_from_env(environ)
+    if store is not None:
+        shared = CallerStore(store=store)
+        if path.is_file():
+            shared.load_file(path)  # migrated into the store on first refresh()
+        return shared
     return CallerStore(path)
 
 

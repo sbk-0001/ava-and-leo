@@ -482,6 +482,9 @@ class MemoryBookingProvider:
         )
 
     async def cancel_appointment(self, *, booking_id: str) -> dict[str, Any]:
+        refresh = getattr(self.client, "refresh", None)
+        if refresh is not None:
+            await refresh()
         booking = self.client.bookings.get(booking_id)
         result = await self.client.cancel_appointment(booking_id=booking_id)
         if not result.get("ok") or booking is None:
@@ -498,6 +501,9 @@ class MemoryBookingProvider:
     async def lookup_patient(self, *, mobile: str) -> dict[str, Any]:
         if self.client.mode == "disconnected":
             return self.client._unavailable("lookup_patient")
+        refresh = getattr(self.client, "refresh", None)
+        if refresh is not None:
+            await refresh()
         digits = re.sub(r"\D", "", mobile)
         matches = []
         for patient in self.client.patients.values():

@@ -596,6 +596,10 @@ async def my_agent(ctx: JobContext):
         ),
     )
     caller_store = get_shared_caller_store()
+    try:
+        await caller_store.refresh()  # shared memory: what any worker learned
+    except Exception:
+        logger.exception("caller store refresh failed; using what is loaded")
     ani = ani_from_participant(participant)
     if not ani and isinstance(phone_number, str):
         from sip_utils import normalize_au_phone
@@ -789,6 +793,10 @@ async def my_agent(ctx: JobContext):
             cache_task.cancel()
         if ambient is not None:
             await ambient.aclose()
+        try:
+            await asyncio.wait_for(caller_store.flush(), timeout=5)
+        except Exception:
+            logger.exception("caller store flush failed")
         await asyncio.to_thread(
             _save_call_to_supabase, session, ctx, agent_name, started_at, call_log
         )

@@ -13,7 +13,9 @@ import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import os
+import time
 import uuid
 from datetime import timedelta
 from pathlib import Path
@@ -28,12 +30,14 @@ from pydantic import BaseModel
 from desk_events import DESK_EVENT_TYPES, DeskBus
 from persona import BRANCHES, branch_as_dict, get_branch
 from practice import PracticeClient, get_shared_practice
+from state_store import state_store_from_env
 
 load_dotenv(".env.local")
 
 AGENT_NAME = os.getenv("AVA_AGENT_NAME", "ava-and-leo")
 STATIC_DIR = Path(__file__).parent / "portal_static"
 COOKIE_NAME = "ava_portal"
+logger = logging.getLogger("portal")
 
 
 class LoginBody(BaseModel):
@@ -87,11 +91,15 @@ def create_app(
     practice: PracticeClient | None = None,
     require_auth: bool | None = None,
     portal_password: str | None = None,
+    state_store: Any | None = None,
 ) -> FastAPI:
     """Build the portal app. Tests pass an in-memory PracticeClient."""
     app = FastAPI(title="Ava desk — Shellharbour · Dapto · Woonona", docs_url=None)
     app.state.practice = practice
     app.state.desk_bus = DeskBus()
+    # Shared store (Postgres) when DATABASE_URL is set: the desk feed and the
+    # diary then work across processes and serverless instances.
+    app.state.store = state_store if state_store is not None else state_store_from_env()
     app.state.portal_password = (
         portal_password
         if portal_password is not None
@@ -146,7 +154,12 @@ def create_app(
 
     @app.get("/api/health")
     async def health() -> dict[str, str]:
-        return {"ok": "true", "service": "ava-portal"}
+        return {
+            "ok": "true",
+            "service": "ava-portal",
+            "storage": "shared" if app.state.store is not None else "file",
+            "agent": AGENT_NAME,
+        }
 
     @app.get("/api/config")
     async def config(request: Request) -> dict[str, Any]:
@@ -354,12 +367,29 @@ def create_app(
                 detail="Expected a desk transcript, activity, or grounding_violation packet.",
             )
         app.state.desk_bus.publish(packet)
+        store = app.state.store
+        if store is not None:
+            try:
+                await store.append_desk_event(packet)
+            except Exception:
+                logger.exception("desk event was not persisted")
         return {"ok": True}
 
     @app.get("/api/desk/stream")
     async def desk_stream(request: Request) -> StreamingResponse:
         """Signed-in staff subscribe to live desk events (SSE). Cookie or ?token=."""
         _auth(request)
+        store = app.state.store
+        if store is not None:
+            return StreamingResponse(
+                _shared_desk_stream(request, store),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
         queue = app.state.desk_bus.subscribe()
 
         async def generate():
@@ -386,6 +416,42 @@ def create_app(
                 "X-Accel-Buffering": "no",
             },
         )
+
+    async def _shared_desk_stream(request: Request, store: Any):
+        """SSE over the shared event table.
+
+        Serverless hosts cap how long one response may live, so the stream
+        ends itself after DESK_STREAM_MAX_S and the browser's EventSource
+        reconnects with Last-Event-ID. Nothing is lost: events are stored.
+        """
+        max_seconds = float(os.getenv("DESK_STREAM_MAX_S", "240") or 240)
+        poll_s = float(os.getenv("DESK_POLL_S", "1") or 1)
+        raw_last = request.headers.get("last-event-id", "").strip()
+        last = (
+            int(raw_last) if raw_last.isdigit() else await store.latest_desk_event_id()
+        )
+        started = time.monotonic()
+        idle = 0.0
+        yield "retry: 1000\nevent: ready\ndata: {}\n\n"
+        while time.monotonic() - started < max_seconds:
+            if await request.is_disconnected():
+                break
+            try:
+                rows = await store.desk_events_after(last)
+            except Exception:
+                logger.exception("desk event poll failed")
+                rows = []
+            for row_id, packet in rows:
+                last = row_id
+                yield f"id: {row_id}\ndata: {json.dumps(packet, default=str)}\n\n"
+            if rows:
+                idle = 0.0
+            else:
+                idle += poll_s
+                if idle >= 15:
+                    yield ": keepalive\n\n"
+                    idle = 0.0
+            await asyncio.sleep(poll_s)
 
     if STATIC_DIR.exists():
 

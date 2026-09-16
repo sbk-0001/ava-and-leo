@@ -46,7 +46,7 @@ RUN mkdir -p src
 # --locked ensures we use exact versions from uv.lock for reproducible builds
 # This creates a virtual environment and installs all dependencies
 # Ensure your uv.lock file is checked in for consistency across environments
-RUN uv sync --locked
+RUN uv sync --locked --all-extras
 
 # Pre-download any ML models or files the agent needs
 # This runs before COPY . . so the download layer is cached across code-only changes.

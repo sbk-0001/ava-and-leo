@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["syd1"],
+  "functions": {
+    "app.py": {
+      "maxDuration": 300,
+      "memory": 1024,
+      "excludeFiles": "{tests/**,demos/**,docs/**,scripts/**,KMS/**,.data/**,src/audio/**,.github/**,*.md,Dockerfile,livekit.toml,uv.lock}"
+    }
+  }
+}

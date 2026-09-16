@@ -24,7 +24,10 @@ from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-from livekit.agents.llm import FunctionCall, FunctionCallOutput
+try:
+    from livekit.agents.llm import FunctionCall, FunctionCallOutput
+except ImportError:  # the cloud portal runs without the agents SDK
+    FunctionCall = FunctionCallOutput = Any  # type: ignore[misc,assignment]
 
 logger = logging.getLogger("desk")
 

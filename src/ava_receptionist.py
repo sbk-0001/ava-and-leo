@@ -33,7 +33,7 @@ from booking import (
     unwrap_practice_client,
 )
 from call_log import CallLog
-from call_state import CallState, booking_is_locked, spoken_mobile
+from call_state import BRANCH_QUESTION, CallState, booking_is_locked, spoken_mobile
 from caller_store import CallerStore, get_shared_caller_store, upsert_from_booking
 from date_context import current_time_sydney as current_time_sydney_fn
 from date_context import resolve_date_phrase as resolve_date_phrase_fn
@@ -1028,7 +1028,34 @@ class AvaReceptionist(Agent):
         async def _run() -> dict[str, Any]:
             if not (appointment_type or "").strip() or not (date_range or "").strip():
                 return empty_tool_args_result("appointment_type", "date_range")
-            clinic_id = self._select_branch(branch)
+            state = self.state
+            if (
+                state.require_branch_choice
+                and not state.branch_chosen
+                and state.goal_kind not in {"reschedule", "cancel"}
+                and state.branch_asks < 2
+            ):
+                state.branch_asks += 1
+                say = BRANCH_QUESTION
+                if state.known_caller and state.preferred_branch:
+                    usual = get_branch(state.preferred_branch).suburb
+                    say = f"{usual} again, or one of our other clinics?"
+                return {
+                    "ok": False,
+                    "reason": "ask_branch",
+                    "say": say,
+                    "note": (
+                        "Illawarra Dentists has three clinics. Ask which one suits "
+                        "the caller (exactly `say`), wait for the answer, then check "
+                        "the diary there. Do not offer any time yet."
+                    ),
+                }
+            requested = (
+                state.branch
+                if state.require_branch_choice and state.branch_chosen
+                else branch
+            )
+            clinic_id = self._select_branch(requested)
             if not self.state.may_book():
                 return {
                     "ok": False,

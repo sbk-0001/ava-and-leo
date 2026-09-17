@@ -590,6 +590,7 @@ async def my_agent(ctx: JobContext):
         raise
     call_state = CallState(
         branch=branch_id,
+        require_branch_choice=True,
         kill_switch=kill_switch,
         greet_on_enter=not bool(
             phone_number or metadata.get("direction") == "outbound"

@@ -302,6 +302,58 @@ def spoken_mobile(value: str | None) -> str:
     )
 
 
+CLINIC_WORDS: dict[str, str] = {
+    "barrack heights": "shellharbour",
+    "shellharbour": "shellharbour",
+    "shell harbour": "shellharbour",
+    "dapto": "dapto",
+    "woonona": "woonona",
+}
+CLINIC_QUESTION_NAMES: dict[str, str] = {
+    "barrack heights": "shellharbour",
+    "shellharbour": "shellharbour",
+    "dapto": "dapto",
+    "woonona": "woonona",
+}
+BRANCH_QUESTION = (
+    "Which of our clinics suits you best - Barrack Heights, Dapto or Woonona?"
+)
+
+
+def _has_phrase(haystack: str, phrase: str) -> bool:
+    return re.search(rf"\b{re.escape(phrase)}\b", haystack) is not None
+
+
+def clinic_for_text(text: str | None) -> str | None:
+    """The clinic a caller's words point to: a clinic, a suburb, or a dentist
+    who only works at one clinic. None when it is not clear."""
+    lowered = (text or "").lower()
+    if not lowered.strip():
+        return None
+    found = {c for w, c in CLINIC_WORDS.items() if _has_phrase(lowered, w)}
+    found |= {c for w, c in SUBURB_OFFERS.items() if _has_phrase(lowered, w)}
+    if len(found) == 1:
+        return found.pop()
+    if found:
+        return None
+    clinics: set[str] = set()
+    for branch in BRANCHES.values():
+        for name in branch.dentists:
+            surname = name.split()[-1].lower()
+            if surname and _has_phrase(lowered, surname):
+                clinics.add(branch.id)
+    return clinics.pop() if len(clinics) == 1 else None
+
+
+def clinics_named(text: str | None) -> list[str]:
+    lowered = (text or "").lower()
+    seen: list[str] = []
+    for word, clinic in CLINIC_QUESTION_NAMES.items():
+        if _has_phrase(lowered, word) and clinic not in seen:
+            seen.append(clinic)
+    return seen
+
+
 def offer_branch_for_suburb(suburb: str, current_branch: str) -> str | None:
     """If the suburb clearly suits another clinic, return that branch id."""
     key = re.sub(r"\s+", " ", suburb.strip().lower())
@@ -473,6 +525,11 @@ class CallState:
     # 17 Sep 11:07: Friday offered, "8 o'clock on Tuesday is fine", booked Friday.
     offered_weekdays: set[str] = field(default_factory=set)
     day_mismatch: str | None = None
+    # Live calls: the caller picks the clinic before the diary is checked.
+    require_branch_choice: bool = False
+    branch_chosen: bool = False
+    branch_asks: int = 0
+    asked_clinics: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.caller_mobile and is_valid_au_mobile(self.caller_mobile):
@@ -1082,8 +1139,16 @@ class CallState:
         self.barge_in_pending = False
         return self.last_barge_in_resume
 
+    def choose_branch(self, branch_id: str) -> None:
+        self.branch = get_branch(branch_id).id
+        self.preferred_branch = self.branch
+        self.branch_chosen = True
+        self.asked_clinics = []
+
     def observe_assistant_text(self, text: str) -> None:
         """Ava's finished utterance: did she just ask whether a time suits?"""
+        if text and "?" in text:
+            self.asked_clinics = clinics_named(text)
         if is_time_offer_question(text):
             self.awaiting_slot_answer = True
             days = weekdays_in(text)
@@ -1132,6 +1197,12 @@ class CallState:
         if not text:
             return
         self.observe_offer_reply(text)
+        if self.require_branch_choice:
+            clinic = clinic_for_text(text)
+            if clinic:
+                self.choose_branch(clinic)
+            elif len(self.asked_clinics) == 1 and is_acceptance(text):
+                self.choose_branch(self.asked_clinics[0])
         corrected = extract_name_correction(text)
         if corrected:
             self.correct_caller_name(corrected)
@@ -1196,6 +1267,19 @@ class CallState:
         )
 
     def _clinic_line(self) -> str:
+        if self.require_branch_choice and not self.branch_chosen:
+            usual = (
+                f" They have been to {get_branch(self.preferred_branch).suburb} "
+                "before - offer it."
+                if self.known_caller and self.preferred_branch
+                else ""
+            )
+            return (
+                "- clinic: not chosen yet. For a new booking ask which clinic suits "
+                f'them before checking the diary: "{BRANCH_QUESTION}"{usual}\n'
+            )
+        if self.require_branch_choice:
+            return f"- clinic chosen by the caller: {self.branch_name} (id {self.branch}).\n"
         where = f"- clinic: {self.branch_name} (id {self.branch}). "
         if self.channel == "web":
             # Nobody dialled anything on a desk call; staff picked a clinic tab.

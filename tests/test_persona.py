@@ -151,7 +151,7 @@ def test_ava_instructions_answer_as_mapped_branch() -> None:
     assert "front desk at Illawarra Dentists" in text
     assert "Morning, Shellharbour Dentists" not in text
     assert "you never ask which clinic" not in text.lower()
-    assert "put each caller at the clinic that suits them" in text.lower()
+    assert "which of our clinics suits you best" in text.lower()
     assert "Captain Cook Drive" in text
     assert "35 Baan Baan Street" in text
     assert "379 Princes Highway" in text
@@ -201,6 +201,6 @@ def test_clinic_facts_say_who_works_where_and_when_to_offer_another_clinic() -> 
     assert "Dr Chin Valsan: Woonona" in facts
     assert "Offer another site only if" not in facts
     lower = facts.lower()
-    for reason in ("dentist", "live", "prefer", "nothing suitable"):
+    for reason in ("dentist", "live", "prefer", "suitable soon", "ask which clinic"):
         assert reason in lower
     assert "illawarra dentists" in lower

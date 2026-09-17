@@ -19,7 +19,7 @@ def test_instructions_file_is_verbatim() -> None:
     assert text.rstrip().endswith(CALIBRATION_END)
     assert text.count("{{BRANCH_NAME}}") == 7
     assert "THE PRACTICE, AND ITS THREE CLINICS" in text
-    assert "which clinic they want" not in text
+    assert "Which of our clinics suits you best" in text
     assert "a sentence or two" in text.lower()
     assert "Morning, {{BRANCH_NAME}}, Ava speaking!" in text
     assert "how ya going" in text

@@ -332,3 +332,34 @@ async def test_store_failure_falls_back_to_the_desk(monkeypatch) -> None:
     monkeypatch.setattr(desk_events, "post_desk_event_http", fake_http)
     await desk_events.emit_desk_event({"type": "transcript", "text": "hello"})
     assert len(posted) == 1
+
+
+# --- 17 Sep 09:56 typed test: the mobile was read back twice ------------------------
+
+
+def test_yes_to_ava_s_own_read_back_confirms_the_number_once() -> None:
+    """She read "0412 000 111" back before storing it; the yes then found no
+    number, so the tool stored it and made her read it back a second time."""
+    state = CallState(branch="woonona")
+    result = state.confirm_mobile(correct=True, mobile="0412 000 111")
+    assert result["ok"] is True
+    assert result["confirmed"] is True
+    assert state.mobile_confirmed is True
+    assert state.caller_mobile == "0412000111"
+    assert "needs_confirmation" not in result
+
+
+def test_yes_without_any_number_still_asks_for_it() -> None:
+    state = CallState(branch="woonona")
+    result = state.confirm_mobile(correct=True)
+    assert result["ok"] is False
+    assert "mobile" in result["note"]
+
+
+def test_a_different_number_with_yes_is_not_silently_swapped() -> None:
+    state = CallState(branch="woonona")
+    state.register_mobile("0474 470 332")
+    result = state.confirm_mobile(correct=True, mobile="0412 000 111")
+    assert result["ok"] is False
+    assert result["reason"] == "mobile_mismatch"
+    assert state.mobile_confirmed is False

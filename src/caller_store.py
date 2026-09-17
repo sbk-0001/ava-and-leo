@@ -145,11 +145,19 @@ class CallerStore:
             json.dumps(self._payload(), indent=2) + "\n", encoding="utf-8"
         )
 
+    unsynced = False
+
     async def persist(self) -> None:
         if self.store is None:
             self.save()
             return
-        self.store_version = await self.store.save(self.store_key, self._payload())
+        try:
+            self.store_version = await self.store.save(self.store_key, self._payload())
+        except Exception:
+            logger.exception("caller memory save failed; will retry on refresh")
+            self.unsynced = True
+            return
+        self.unsynced = False
 
     def _schedule_persist(self) -> None:
         try:
@@ -170,16 +178,27 @@ class CallerStore:
         if self.store is None:
             return
         await self.flush()
-        snapshot = await self.store.load(self.store_key)
+        try:
+            version = await self.store.version(self.store_key)
+            if version and version == self.store_version and not self.unsynced:
+                return
+            snapshot = await self.store.load(self.store_key)
+        except Exception:
+            logger.warning("caller memory store unreachable; using the copy in memory")
+            return
         if not snapshot.exists:
             if self.records:
-                await self.persist()  # first boot: migrate the local file
+                await self.persist()  # first boot or outage: write what we have
             return
-        if snapshot.version == self.store_version:
+        if snapshot.version == self.store_version and not self.unsynced:
             return
+        mine = dict(self.records) if self.unsynced else {}
         self.records = {}
         self._apply_items((snapshot.payload or {}).get("records"))
         self.store_version = snapshot.version
+        if mine:
+            self.records.update(mine)
+            await self.persist()
 
     def lookup(self, e164: str | None) -> CallerRecord | None:
         key = to_e164(e164)

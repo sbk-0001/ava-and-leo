@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import sys
@@ -27,6 +28,7 @@ from persona import BRANCHES, VERIFY
 from state_store import DIARY_KEY, state_store_from_env
 
 PracticeMode = Literal["disconnected", "mock"]
+logger = logging.getLogger("ava.practice")
 SYDNEY = ZoneInfo("Australia/Sydney")
 DEFAULT_MOCK_PATH = Path(".data/mock_diary.json")
 
@@ -128,6 +130,9 @@ class PracticeClient:
     store_key: str = DIARY_KEY
     store_version: int = 0
     _pending: set[Any] = field(default_factory=set, repr=False, compare=False)
+    # What the shared store held when we last synced; persist() sends the diff.
+    _synced: dict[str, Any] | None = field(default=None, repr=False, compare=False)
+    unsynced: bool = False
 
     def _unavailable(self, action: str) -> dict[str, Any]:
         return {
@@ -523,12 +528,55 @@ class PracticeClient:
             return
         self._apply_payload(json.loads(path.read_text(encoding="utf-8")))
 
+    _SECTIONS = ("patients", "slots", "bookings")
+
+    def _diff(self, payload: dict[str, Any]) -> tuple[dict[str, dict], dict[str, Any]]:
+        synced = self._synced or {}
+        sections: dict[str, dict] = {}
+        for name in self._SECTIONS:
+            before = synced.get(name) or {}
+            changed = {
+                key: value
+                for key, value in payload[name].items()
+                if before.get(key) != value
+            }
+            if changed:
+                sections[name] = changed
+        replace: dict[str, Any] = {}
+        if payload["messages"] != (synced.get("messages") or []):
+            replace["messages"] = payload["messages"]
+        return sections, replace
+
     async def persist(self) -> None:
-        """Write the diary where the other process can see it, and wait for it."""
+        """Write the diary where the other process can see it.
+
+        Only changed entries travel (the whole diary is 130 KB and cloud Ava
+        runs in Mumbai). If the store is down, the change is kept and written
+        on the next refresh; the call carries on.
+        """
         if self.store is None:
             self.save()
             return
-        self.store_version = await self.store.save(self.store_key, self._payload())
+        payload = self._payload()
+        try:
+            if self._synced is None or self.store_version == 0:
+                version = await self.store.save(self.store_key, payload)
+            else:
+                sections, replace = self._diff(payload)
+                if not sections and not replace:
+                    self.unsynced = False
+                    return
+                version = await self.store.merge_sections(
+                    self.store_key, sections, replace
+                )
+        except Exception:
+            logger.exception("diary save failed; will retry on the next refresh")
+            self.unsynced = True
+            return
+        if version == self.store_version + 1 or self._synced is None:
+            self.store_version = version
+        self._synced = payload
+        self.unsynced = False
 
     def _schedule_persist(self) -> None:
         try:
@@ -555,19 +603,46 @@ class PracticeClient:
         if self.store is None:
             return
         await self.flush()
-        snapshot = await self.store.load(self.store_key)
-        if not snapshot.exists:
+        try:
+            version = await self.store.version(self.store_key)
+        except Exception:
+            logger.warning("diary store unreachable; using the copy in memory")
+            return
+        if version == 0:
             if self.mode == "mock" and not self.slots:
                 seed_mock_diary(self)
             backfill_demo_patient_dobs(self)
+            self.store_version = 0
+            self._synced = None
             await self.persist()
             return
-        if snapshot.version == self.store_version:
+        if version == self.store_version:
+            if self.unsynced:
+                await self.persist()
             return
-        self._apply_payload(snapshot.payload or {})
-        backfill_demo_patient_dobs(self)
+        # Keep anything we changed that the store has not seen yet.
+        local_sections: dict[str, dict] = {}
+        local_replace: dict[str, Any] = {}
+        if self._synced is not None and self.unsynced:
+            local_sections, local_replace = self._diff(self._payload())
+        try:
+            snapshot = await self.store.load(self.store_key)
+        except Exception:
+            logger.warning("diary load failed; using the copy in memory")
+            return
+        loaded = snapshot.payload or {}
+        self._apply_payload(loaded)
+        self._synced = self._payload()
         self.store_version = snapshot.version
-        if assign_named_dentists(self):
+        if local_sections or local_replace:
+            merged = self._payload()
+            for name, entries in local_sections.items():
+                merged[name].update(entries)
+            merged.update(local_replace)
+            self._apply_payload(merged)
+        backfill_demo_patient_dobs(self)
+        assign_named_dentists(self)
+        if self._payload() != self._synced:
             await self.persist()
 
     def update_patient_mobile(

@@ -23,6 +23,8 @@ import contextlib
 import json
 import logging
 import os
+import re
+import time
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -51,6 +53,13 @@ create index if not exists ava_desk_events_created_at_idx
 """
 
 
+_IDENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
+def _ms(started: float) -> float:
+    return (time.perf_counter() - started) * 1000
+
+
 class StateConflictError(RuntimeError):
     """Someone else saved this document since we loaded it."""
 
@@ -66,7 +75,16 @@ class Snapshot:
 
 
 class StateStore(Protocol):
+    async def version(self, key: str) -> int: ...
+
     async def load(self, key: str) -> Snapshot: ...
+
+    async def merge_sections(
+        self,
+        key: str,
+        sections: Mapping[str, Mapping[str, Any]],
+        replace: Mapping[str, Any] | None = None,
+    ) -> int: ...
 
     async def save(
         self,
@@ -113,6 +131,24 @@ class MemoryStateStore:
         version = current + 1
         self._rows[key] = (deepcopy(dict(payload)), version)
         return version
+
+    async def version(self, key: str) -> int:
+        return self._rows.get(key, (None, 0))[1]
+
+    async def merge_sections(
+        self,
+        key: str,
+        sections: Mapping[str, Mapping[str, Any]],
+        replace: Mapping[str, Any] | None = None,
+    ) -> int:
+        payload, current = self._rows.get(key, ({}, 0))
+        merged = deepcopy(payload)
+        for name, entries in sections.items():
+            merged.setdefault(name, {}).update(deepcopy(dict(entries)))
+        for name, value in (replace or {}).items():
+            merged[name] = deepcopy(value)
+        self._rows[key] = (merged, current + 1)
+        return current + 1
 
     async def append_desk_event(self, packet: Mapping[str, Any]) -> int:
         self._events.append(deepcopy(dict(packet)))
@@ -180,13 +216,74 @@ class PostgresStateStore:
             if not present:
                 await conn.execute(SCHEMA_SQL)
 
+    async def version(self, key: str) -> int:
+        started = time.perf_counter()
+        pool = await self._pool()
+        async with pool.acquire() as conn:
+            value = await conn.fetchval(
+                "select version from ava_state where key = $1", key
+            )
+        logger.debug("state version %s %.0fms", key, _ms(started))
+        return int(value or 0)
+
+    async def merge_sections(
+        self,
+        key: str,
+        sections: Mapping[str, Mapping[str, Any]],
+        replace: Mapping[str, Any] | None = None,
+    ) -> int:
+        """Write only changed entries: entry-level merge inside each section.
+
+        Two writers touching different bookings both survive; the same entry
+        is last-writer-wins.
+        """
+        started = time.perf_counter()
+        names = [n for n in sections if _IDENT_RE.match(n)]
+        replaced = [n for n in (replace or {}) if _IDENT_RE.match(n)]
+        patch = {n: sections[n] for n in names}
+        patch.update({n: (replace or {})[n] for n in replaced})
+        merge_expr = "ava_state.payload"
+        if names:
+            pairs = ", ".join(
+                f"'{n}', coalesce(ava_state.payload->'{n}', '{{}}'::jsonb) "
+                f"|| coalesce(excluded.payload->'{n}', '{{}}'::jsonb)"
+                for n in names
+            )
+            merge_expr += f" || jsonb_build_object({pairs})"
+        if replaced:
+            pairs = ", ".join(f"'{n}', excluded.payload->'{n}'" for n in replaced)
+            merge_expr += f" || jsonb_build_object({pairs})"
+        pool = await self._pool()
+        async with pool.acquire() as conn:
+            value = await conn.fetchval(
+                f"""
+                insert into ava_state (key, payload) values ($1, $2::jsonb)
+                on conflict (key) do update
+                    set payload = {merge_expr},
+                        version = ava_state.version + 1,
+                        updated_at = now()
+                returning version
+                """,
+                key,
+                json.dumps(patch, default=str),
+            )
+        logger.info(
+            "state merge %s %s bytes %.0fms",
+            key,
+            len(json.dumps(patch, default=str)),
+            _ms(started),
+        )
+        return int(value)
+
     async def load(self, key: str) -> Snapshot:
+        started = time.perf_counter()
         pool = await self._pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 "select payload::text as payload, version from ava_state where key = $1",
                 key,
             )
+        logger.info("state load %s %.0fms", key, _ms(started))
         if row is None:
             return Snapshot(None, 0)
         return Snapshot(json.loads(row["payload"]), int(row["version"]))

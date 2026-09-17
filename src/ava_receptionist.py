@@ -1482,7 +1482,9 @@ class AvaReceptionist(Agent):
 
         Args:
             correct: True if the caller agreed the read-back was right.
-            mobile: The replacement number, only when correct is false.
+            mobile: With correct=false, the replacement number. With
+                correct=true, the number you read back (always pass it), so a
+                yes to your own read-back is enough - never read it back twice.
         """
         del context
         result = self.state.confirm_mobile(correct=correct, mobile=mobile)

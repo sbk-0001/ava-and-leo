@@ -930,11 +930,35 @@ class CallState:
     ) -> dict[str, Any]:
         """The caller answered the read-back. Yes locks it; no takes a new number."""
         if correct:
+            given = normalize_au_mobile(mobile) if mobile else ""
+            stored = (
+                normalize_au_mobile(self.caller_mobile) if self.caller_mobile else ""
+            )
+            if given and stored and given != stored:
+                return {
+                    "ok": False,
+                    "reason": "mobile_mismatch",
+                    "mobile": self.caller_mobile,
+                    "spoken": spoken_mobile(self.caller_mobile),
+                    "note": (
+                        "That is not the number on file. Read the number in `spoken` "
+                        "back and ask which is right. Do not book yet."
+                    ),
+                }
+            if given and not stored:
+                # She read this number back herself and the caller said yes.
+                stored_result = self._register_mobile_raw(given)
+                if not stored_result.get("ok"):
+                    return stored_result
             if not is_valid_au_mobile(self.caller_mobile):
                 return {
                     "ok": False,
                     "reason": "no_mobile",
-                    "note": "Ask for the mobile first.",
+                    "note": (
+                        "No mobile is stored. If the caller just said yes to a number "
+                        "you read back, call confirm_mobile again with correct=true "
+                        "and that mobile. Otherwise ask for the mobile first."
+                    ),
                 }
             self.mobile_confirmed = True
             return {

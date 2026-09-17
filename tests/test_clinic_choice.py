@@ -141,6 +141,10 @@ async def test_replay_1106_call_asks_for_the_clinic_before_offering_times(
     for name in ("Barrack Heights", "Dapto", "Woonona"):
         assert name in asked["say"]
     assert "slots" not in asked
+    # She had just said "let's see what we've got" and covered with
+    # "Scrolling, scrolling..." / "it's being a bit stubborn".
+    assert "not a problem" in asked["note"]
+    assert "never say you are checking" in asked["note"].lower()
 
     ava.state.observe_assistant_text(asked["say"])
     ava.state.observe_user_text("Woonona please")

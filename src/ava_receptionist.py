@@ -1045,9 +1045,11 @@ class AvaReceptionist(Agent):
                     "reason": "ask_branch",
                     "say": say,
                     "note": (
-                        "Illawarra Dentists has three clinics. Ask which one suits "
-                        "the caller (exactly `say`), wait for the answer, then check "
-                        "the diary there. Do not offer any time yet."
+                        "This is not a problem and nothing is slow. Illawarra "
+                        "Dentists has three clinics: ask which one suits the "
+                        "caller (exactly `say`) and wait for the answer, then check "
+                        "the diary there. Never say you are checking, looking, "
+                        "scrolling, or that anything is stuck. Do not offer a time yet."
                     ),
                 }
             requested = (

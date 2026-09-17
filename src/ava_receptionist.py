@@ -78,6 +78,31 @@ AVA_DEFAULT_VOICE = "marin"
 # Server VAD 450-550ms silence. Instant barge-in mid-word.
 # Docs: https://docs.livekit.io/agents/models/realtime/plugins/openai/#turn-detection
 AVA_VAD_SILENCE_MS = 500
+# Background noise (18 Sep): 0.5 let traffic, TVs and other voices count as the
+# caller speaking. Higher needs a clearer voice; callers can still cut in.
+AVA_VAD_THRESHOLD = 0.75
+AVA_NOISE_REDUCTION = "near_field"  # phone held to the mouth
+
+
+def resolve_vad_threshold(env: Mapping[str, str] | None = None) -> float:
+    environ = env if env is not None else os.environ
+    try:
+        value = float(str(environ.get("AVA_VAD_THRESHOLD", "")).strip())
+    except ValueError:
+        return AVA_VAD_THRESHOLD
+    return value if 0.3 <= value <= 0.95 else AVA_VAD_THRESHOLD
+
+
+def resolve_noise_reduction(env: Mapping[str, str] | None = None) -> str | None:
+    environ = env if env is not None else os.environ
+    mode = str(environ.get("AVA_NOISE_REDUCTION", "")).strip().lower()
+    if mode in {"off", "none", "0", "false"}:
+        return None
+    if mode in {"near_field", "far_field"}:
+        return mode
+    return AVA_NOISE_REDUCTION
+
+
 AVA_SPEECH_SPEED = 0.9
 # Ava is an English-only receptionist. Without this the Realtime transcriber
 # guesses the language and returns English audio as Cyrillic or Chinese, which
@@ -202,7 +227,7 @@ def ava_realtime_model() -> openai.realtime.RealtimeModel:
         "voice": resolve_ava_voice(),
         "turn_detection": TurnDetection(
             type="server_vad",
-            threshold=0.5,
+            threshold=resolve_vad_threshold(),
             prefix_padding_ms=300,
             silence_duration_ms=AVA_VAD_SILENCE_MS,
             create_response=True,
@@ -210,6 +235,13 @@ def ava_realtime_model() -> openai.realtime.RealtimeModel:
         ),
     }
     signature = inspect.signature(openai.realtime.RealtimeModel.__init__)
+    reduction = resolve_noise_reduction()
+    if "input_audio_noise_reduction" in signature.parameters:
+        from openai.types.beta.realtime.session import InputAudioNoiseReduction
+
+        kwargs["input_audio_noise_reduction"] = (
+            InputAudioNoiseReduction(type=reduction) if reduction else None
+        )
     if "input_audio_transcription" in signature.parameters:
         try:
             from openai.types.beta.realtime.session import InputAudioTranscription

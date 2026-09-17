@@ -21,6 +21,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -603,11 +604,18 @@ class PracticeClient:
         if self.store is None:
             return
         await self.flush()
+        started = perf_counter()
         try:
             version = await self.store.version(self.store_key)
         except Exception:
             logger.warning("diary store unreachable; using the copy in memory")
             return
+        logger.info(
+            "diary refresh version=%s have=%s %.0fms",
+            version,
+            self.store_version,
+            (perf_counter() - started) * 1000,
+        )
         if version == 0:
             if self.mode == "mock" and not self.slots:
                 seed_mock_diary(self)

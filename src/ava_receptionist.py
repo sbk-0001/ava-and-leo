@@ -1198,6 +1198,12 @@ class AvaReceptionist(Agent):
                 }
             if self.state.slot_hesitated:
                 say = time_check_say(slot_id, self.state.last_availability_slots)
+                if self.state.day_mismatch:
+                    say = (
+                        "Just to check - did you mean "
+                        f"{self.state.offered_day_names() or 'the day I said'}, or "
+                        f"{self.state.day_mismatch.capitalize()}?"
+                    )
                 return {
                     "ok": False,
                     "confirmed": False,
@@ -1270,7 +1276,13 @@ class AvaReceptionist(Agent):
             result = dict(result)
             self._queue_confirmation_text("booked", result)
             if booking_is_locked(result):
-                self._kick_book_confirm(context, result)
+                # The normal tool reply says this, once. A reply kicked from
+                # inside the tool ran before the model had the result.
+                result["confirm_now"] = book_confirm_facts(
+                    self.state.caller_name or "the caller", result
+                )
+                self.state.book_confirm_kicked_at = time.perf_counter()
+                self.state.note_booking_confirmed_aloud()
         self._log_tool(
             "book_appointment",
             result,
@@ -1376,7 +1388,11 @@ class AvaReceptionist(Agent):
         if result.get("ok") and result.get("confirmed"):
             result = dict(result)
             self._queue_confirmation_text("cancelled", result)
-            self._kick_cancel_confirm(context, result)
+            name = self.state.caller_name or "the caller"
+            result["confirm_now"] = (
+                f"The appointment for {name} is cancelled. Say that once. "
+                f"{confirmation_text_line(result)} Do not invent another booking."
+            )
         self._log_tool("cancel_appointment", result, {"booking_id": booking_id})
         return result
 

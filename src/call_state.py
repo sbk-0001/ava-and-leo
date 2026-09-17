@@ -235,6 +235,11 @@ _TIME_QUESTION_RE = re.compile(
     r"\b(?:suit|sound|work|how'?s that|would you like|want it|that okay|ok\?)",
     re.I,
 )
+# An offer cut off by the caller ("... or half past eight. Which") has no "?".
+_OFFER_CHOICE_RE = re.compile(r"\b(?:which|suits?|works? better)\b", re.I)
+_WEEKDAY_RE = re.compile(
+    r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", re.I
+)
 
 
 def is_hesitation(text: str | None) -> bool:
@@ -249,11 +254,15 @@ def is_acceptance(text: str | None) -> bool:
 
 def is_time_offer_question(text: str | None) -> bool:
     raw = (text or "").strip()
-    return (
-        "?" in raw
-        and bool(_OFFER_TIME_RE.search(raw))
-        and bool(_TIME_QUESTION_RE.search(raw))
-    )
+    if not _OFFER_TIME_RE.search(raw):
+        return False
+    if "?" in raw and _TIME_QUESTION_RE.search(raw):
+        return True
+    return bool(_OFFER_CHOICE_RE.search(raw))
+
+
+def weekdays_in(text: str | None) -> set[str]:
+    return {m.lower() for m in _WEEKDAY_RE.findall(text or "")}
 
 
 def normalize_au_mobile(value: str | None) -> str:
@@ -461,6 +470,9 @@ class CallState:
     awaiting_slot_answer: bool = False
     slot_hesitated: bool = False
     booking_confirmed_aloud: bool = False
+    # 17 Sep 11:07: Friday offered, "8 o'clock on Tuesday is fine", booked Friday.
+    offered_weekdays: set[str] = field(default_factory=set)
+    day_mismatch: str | None = None
 
     def __post_init__(self) -> None:
         if self.caller_mobile and is_valid_au_mobile(self.caller_mobile):
@@ -1074,6 +1086,14 @@ class CallState:
         """Ava's finished utterance: did she just ask whether a time suits?"""
         if is_time_offer_question(text):
             self.awaiting_slot_answer = True
+            days = weekdays_in(text)
+            lowered = (text or "").lower()
+            if "tomorrow" in lowered:
+                days.add(self.tomorrow.strftime("%A").lower())
+            if "today" in lowered:
+                days.add(self.today.strftime("%A").lower())
+            if days:
+                self.offered_weekdays = days
         elif text and "?" in text:
             # She asked something else (name, mobile): a yes now answers that.
             self.awaiting_slot_answer = False
@@ -1085,14 +1105,27 @@ class CallState:
         if is_hesitation(text):
             self.slot_hesitated = True
             return
-        if is_acceptance(text):
+        said_days = weekdays_in(text)
+        if (
+            said_days
+            and self.offered_weekdays
+            and not (said_days & self.offered_weekdays)
+        ):
+            self.slot_hesitated = True
+            self.day_mismatch = sorted(said_days)[0]
+        elif is_acceptance(text):
             self.slot_hesitated = False
+            self.day_mismatch = None
         self.awaiting_slot_answer = False
 
     def note_booking_confirmed_aloud(self) -> None:
         self.booking_confirmed_aloud = True
         self.slot_hesitated = False
         self.awaiting_slot_answer = False
+        self.day_mismatch = None
+
+    def offered_day_names(self) -> str:
+        return " or ".join(d.capitalize() for d in sorted(self.offered_weekdays))
 
     def observe_user_text(self, text: str) -> None:
         """Code-side flow: suburb offers, urgency, bot asks. Never a branch menu."""
@@ -1267,7 +1300,13 @@ class CallState:
 
     def _offer_answer_line(self) -> str:
         lines = ""
-        if self.slot_hesitated:
+        if self.day_mismatch:
+            lines += (
+                f"- the caller said {self.day_mismatch.capitalize()} but you offered "
+                f"{self.offered_day_names() or 'a different day'}. Ask which day they "
+                "meant before booking anything.\n"
+            )
+        elif self.slot_hesitated:
             lines += (
                 "- the caller hesitated at the time you offered and did not say yes. "
                 "Ask plainly whether that time suits, or offer another. Do not book "

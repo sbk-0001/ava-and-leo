@@ -200,7 +200,13 @@ class _Session:
         return SimpleNamespace()
 
 
-async def test_kicked_confirmation_cancels_the_second_tool_reply(monkeypatch) -> None:
+async def test_the_booking_is_confirmed_once_by_the_normal_tool_reply(
+    monkeypatch,
+) -> None:
+    """11:08 phone call: code kicked a confirmation before the model had seen
+    the result (it said "let's lock that in... should only take a sec"), and the
+    guard then cancelled the real reply - 28 seconds of silence until Robert
+    asked "Is this booked?". The tool reply is now the one confirmation."""
     from ava_receptionist import attach_tool_reply_guard
 
     ava, _ = _ava(monkeypatch)
@@ -222,20 +228,64 @@ async def test_kicked_confirmation_cancels_the_second_tool_reply(monkeypatch) ->
         name="Robert",
     )
     assert booked["confirmed"] is True
-    assert len(session.replies) == 1, "one confirmation, from code"
+    assert session.replies == [], (
+        "no early confirmation before the model sees the result"
+    )
+    assert "Dr Mohit Tolani" in booked["confirm_now"]
+    assert "all set" in booked["confirm_now"]
+    assert ava.state.booking_confirmed_aloud is True
 
-    (handler,) = session.handlers["function_tools_executed"]
-    ev = _Event("book_appointment")
-    handler(ev)
-    assert ev.cancelled is True, "the model must not confirm a second time"
+    for handler in session.handlers.get("function_tools_executed", []):
+        ev = _Event("book_appointment")
+        handler(ev)
+        assert ev.cancelled is False, "the tool reply is the confirmation"
 
-    other = _Event("check_availability")
-    handler(other)
-    assert other.cancelled is False
 
-    again = _Event("book_appointment")
-    handler(again)
-    assert again.cancelled is False, "the guard is one-shot"
+# --- 11:07: "8 o'clock on Tuesday is fine" after a Friday offer ----------------------
+
+FRIDAY_OFFER = (
+    "Alright, for tomorrow, which is Friday the 18th, I've got eight o'clock with "
+    "Dr Mohit Tolani, or half past eight with Dr Pat Pandey. Which"
+)
+
+
+def test_a_different_day_in_the_yes_is_not_a_yes() -> None:
+    state = CallState(branch="shellharbour")
+    state.observe_assistant_text(FRIDAY_OFFER)  # cut off mid-question
+    state.observe_user_text("8 o'clock on Tuesday morning is fine.")
+    assert state.slot_hesitated is True
+    assert state.day_mismatch == "tuesday"
+    assert "Tuesday" in state.prompt_block()
+
+
+def test_the_same_day_in_the_yes_is_a_yes() -> None:
+    state = CallState(branch="shellharbour")
+    state.observe_assistant_text(FRIDAY_OFFER)
+    state.observe_user_text("8 o'clock on Friday is fine.")
+    assert state.slot_hesitated is False
+    assert state.day_mismatch is None
+
+
+async def test_booking_asks_which_day_when_they_named_another(monkeypatch) -> None:
+    ava, practice = _ava(monkeypatch)
+    ctx = SimpleNamespace()
+    ava.state.observe_user_text("I want to book")
+    await ava.check_availability(
+        ctx, appointment_type="check up", date_range="2026-09-17"
+    )
+    ava.state.observe_assistant_text(FRIDAY_OFFER)
+    ava.state.observe_user_text("8 o'clock on Tuesday morning is fine.")
+    ava.state.register_mobile("0474 470 332")
+    ava.state.confirm_mobile(correct=True)
+    held = await ava.book_appointment(
+        ctx,
+        slot_id="slot_shellharbour_2026-09-17_1000_dr-mohit-tolani",
+        reason="broken tooth",
+        name="Robert",
+    )
+    assert held["reason"] == "time_not_agreed"
+    assert "Tuesday" in held["say"]
+    assert not practice.bookings
 
 
 def test_after_confirming_aloud_she_does_not_repeat_it() -> None:

@@ -413,10 +413,11 @@ async def test_fillers_before_cancel_and_book_confirm_kicked_under_one_second(
     )
     assert booked.get("confirmed") is True
     assert player.played, "filler must utter before book await"
-    assert ava.state.book_confirm_kicked_at is not None
     assert slow.tool_ok_at is not None
-    assert ava.state.book_confirm_kicked_at - slow.tool_ok_at < 1.0
-    assert replies, "confirm path must kick generate_reply"
+    # The normal tool reply confirms, with the facts in the result; an early
+    # kicked reply (before the model saw the result) left 28s of silence.
+    assert "all set" in booked["confirm_now"]
+    assert not replies
     assert "_dispatch_with_ladder" in inspect.getsource(
         AvaReceptionist.cancel_appointment
     )
